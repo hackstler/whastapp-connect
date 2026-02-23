@@ -1,0 +1,8 @@
+CLAUDE.local.md
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+build/
+*.js.map

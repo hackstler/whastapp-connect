@@ -1,0 +1,29 @@
+---
+description: AI behavior rules for this project — language, style, output format
+alwaysApply: true
+---
+
+# AI Behavior
+
+## Output Language
+
+- All code in English
+- Responses to the user in Spanish
+- NEVER add code comments in Spanish
+- NEVER add comments that narrate what the code does — only explain non-obvious intent
+
+## Code Generation
+
+- Apply SOLID, KISS, DRY, YAGNI at all times
+- Use TypeScript strict mode patterns: `infer`, `keyof`, mapped types
+- Prefer composition over inheritance
+- No default exports — named exports only
+- Never generate test files, ESLint configs, or boilerplate unless explicitly requested
+
+## Forbidden in Generated Code
+
+- `any` types
+- `console.log` (use project logger)
+- Hardcoded secrets or URLs
+- `enum` (use `as const` unions)
+- Comments that explain what the code does (only why)

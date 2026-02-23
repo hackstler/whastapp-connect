@@ -1,0 +1,54 @@
+---
+description: TypeScript strict coding standards — types, patterns, error handling
+globs: **/*.ts,**/*.tsx
+alwaysApply: false
+---
+
+# TypeScript Standards
+
+## Types
+
+- No `any` — use `unknown` + type guards
+- Explicit return types on all public functions
+- Prefer `type` over `interface` for shapes; `interface` for extensible contracts
+- Use `satisfies` to validate without widening
+- `as const` union types instead of `enum`
+
+```typescript
+// ❌
+const getUser = async (id) => { ... }
+
+// ✅
+const getUser = async (id: string): Promise<User | null> => { ... }
+```
+
+## Advanced Patterns
+
+```typescript
+type ExtractSuccess<T> = T extends { success: true; data: infer D } ? D : never;
+
+type ReadonlyDeep<T> = { readonly [K in keyof T]: ReadonlyDeep<T[K]> };
+
+type EventMap = { userCreated: User; orderPlaced: Order };
+type Handler<K extends keyof EventMap> = (payload: EventMap[K]) => void;
+```
+
+## Error Handling
+
+```typescript
+// ❌
+try { await op(); } catch (e) {}
+
+// ✅
+try {
+  await op();
+} catch (error) {
+  throw new ServiceError('Operation failed', { cause: error });
+}
+```
+
+## Async
+
+- All async functions must handle rejection
+- No floating Promises — always `await` or chain `.catch()`
+- Use `Promise.allSettled` when partial failures are acceptable
