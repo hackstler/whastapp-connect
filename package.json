@@ -1,0 +1,33 @@
+{
+  "name": "whatsapp-rag",
+  "version": "0.1.0",
+  "description": "WhatsApp listener — captura mensajes propios y los envía al backend RAG",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "hono": "^4.6.0",
+    "lru-cache": "^11.0.0",
+    "puppeteer": "^22.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

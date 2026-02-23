@@ -1,0 +1,18 @@
+node_modules/
+dist/
+
+# WhatsApp session — usar volumen persistente en producción, NUNCA commitear
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Local AI config
+CLAUDE.local.md
+
+# Build artifacts
+*.tsbuildinfo
+*.js.map
