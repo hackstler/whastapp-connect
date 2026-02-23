@@ -1,0 +1,20 @@
+{
+  "hooks": [
+    {
+      "event": "PostToolUse",
+      "matcher": {
+        "tool": "Write",
+        "file_pattern": "**/*.ts"
+      },
+      "command": "pnpm typecheck --noEmit 2>&1 | head -20"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": {
+        "tool": "Bash",
+        "command_pattern": "git commit*"
+      },
+      "command": "pnpm lint --quiet 2>&1 | head -20"
+    }
+  ]
+}

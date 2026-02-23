@@ -1,0 +1,32 @@
+---
+description: Git branch naming and conventional commit format for this project
+alwaysApply: true
+---
+
+# Git Conventions
+
+## Branches
+
+```
+feat/<ticket-id>-short-description
+fix/<ticket-id>-short-description
+chore/<description>
+refactor/<description>
+```
+
+## Commit Format
+
+`<type>(<scope>): <subject>` — max 72 chars, imperative mood
+
+```
+feat(auth): add refresh token rotation
+fix(orders): handle null shipping address
+refactor(payments): extract strategy pattern
+chore(deps): upgrade typescript to 5.4
+feat(api)!: remove deprecated v1 endpoints
+```
+
+Types: `feat` `fix` `refactor` `chore` `docs` `perf` `ci` `test`
+
+- No period at end
+- Breaking change: append `!` after type/scope

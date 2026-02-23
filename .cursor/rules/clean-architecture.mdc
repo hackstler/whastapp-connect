@@ -1,0 +1,59 @@
+---
+description: Clean architecture enforcement — layer boundaries, dependency direction, patterns
+globs: src/**/*.ts
+alwaysApply: false
+---
+
+# Clean Architecture
+
+## Dependency Direction
+
+```
+domain ← application ← infrastructure
+```
+
+- `domain/` imports nothing from this project
+- `application/` imports only from `domain/`
+- `infrastructure/` imports from `application/` and `domain/`
+- NEVER invert this direction
+
+## Use Case Structure
+
+```typescript
+// ✅ — single method, typed DTOs
+class CreateUserUseCase {
+  constructor(private readonly users: UserRepository) {}
+
+  async execute(dto: CreateUserDTO): Promise<CreateUserResult> {
+    const user = User.create(dto);
+    await this.users.save(user);
+    return { id: user.id.value };
+  }
+}
+```
+
+## Value Objects
+
+```typescript
+// ✅ — immutable, validated at construction
+class Email {
+  private constructor(readonly value: string) {}
+
+  static create(raw: string): Email {
+    if (!raw.includes('@')) throw new InvalidEmailError(raw);
+    return new Email(raw.toLowerCase());
+  }
+}
+```
+
+## Repository Pattern
+
+```typescript
+// domain/ports/user-repository.ts
+interface UserRepository {
+  findById(id: UserId): Promise<User | null>;
+  save(user: User): Promise<void>;
+}
+
+// infrastructure/repositories/pg-user-repository.ts — implements the port
+```
