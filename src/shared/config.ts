@@ -5,7 +5,9 @@ const ConfigSchema = z.object({
   SESSION_PATH: z.string().default('.wwebjs_auth'),
   DEDUP_TTL_MS: z.coerce.number().int().positive().default(300_000),
   DEDUP_MAX_SIZE: z.coerce.number().int().positive().default(1000),
-  PORT: z.coerce.number().int().positive().default(3000),
+  PORT: z.coerce.number().int().positive().default(3001),
+  /** Si se define, los endpoints /qr y /logout exigen X-API-Key: <valor> */
+  API_KEY: z.string().min(1).optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>

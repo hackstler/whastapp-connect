@@ -9,10 +9,10 @@ export class ProcessMessageUseCase {
     private readonly dedup: DedupPort,
   ) {}
 
-  async execute(message: WhatsAppMessage): Promise<void> {
+  async execute(message: WhatsAppMessage): Promise<string | null> {
     if (this.dedup.isDuplicate(message.id)) {
       logger.debug('Skipping duplicate message', { messageId: message.id })
-      return
+      return null
     }
 
     this.dedup.markSeen(message.id)
@@ -22,6 +22,6 @@ export class ProcessMessageUseCase {
       preview: message.body.slice(0, 80),
     })
 
-    await this.ingest.ingest(message)
+    return this.ingest.ingest(message)
   }
 }
