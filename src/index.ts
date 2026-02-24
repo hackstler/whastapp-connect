@@ -9,7 +9,7 @@ import { logger } from './shared/logger'
 async function main(): Promise<void> {
   // Composition root — DI manual
   const dedup = new LruDedupCache(config.DEDUP_MAX_SIZE, config.DEDUP_TTL_MS)
-  const ingestAdapter = new RagIngestAdapter(config.INGEST_URL)
+  const ingestAdapter = new RagIngestAdapter(config.INGEST_URL, config.RAG_API_KEY)
   const processMessage = new ProcessMessageUseCase(ingestAdapter, dedup)
   const whatsappClient = new WhatsAppListenerClient(config.SESSION_PATH, processMessage)
 

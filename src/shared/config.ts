@@ -8,6 +8,8 @@ const ConfigSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
   /** Si se define, los endpoints /qr y /logout exigen X-API-Key: <valor> */
   API_KEY: z.string().min(1).optional(),
+  /** API key del backend RAG — se envía como X-API-Key en cada petición */
+  RAG_API_KEY: z.string().min(1).optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>

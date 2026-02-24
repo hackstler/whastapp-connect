@@ -6,7 +6,10 @@ export class RagIngestAdapter implements IngestPort {
   /** conversationId persistido en memoria por chatId para mantener el hilo */
   private readonly conversationIds = new Map<string, string>()
 
-  constructor(private readonly chatUrl: string) {}
+  constructor(
+    private readonly chatUrl: string,
+    private readonly apiKey?: string,
+  ) {}
 
   async ingest(message: WhatsAppMessage): Promise<string | null> {
     const orgId = `whatsapp-${message.chatId}`
@@ -17,9 +20,12 @@ export class RagIngestAdapter implements IngestPort {
       body['conversationId'] = conversationId
     }
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (this.apiKey) headers['X-API-Key'] = this.apiKey
+
     const response = await fetch(this.chatUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
     })
 
