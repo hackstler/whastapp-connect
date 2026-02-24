@@ -12,7 +12,8 @@ function apiKeyMiddleware(apiKey: string | undefined): MiddlewareHandler {
   }
   const key = apiKey
   return async (c, next) => {
-    if (c.req.header('X-API-Key') !== key) {
+    const provided = c.req.header('X-API-Key') ?? c.req.query('key')
+    if (provided !== key) {
       return c.json({ error: 'Unauthorized' }, 401)
     }
     return next()
