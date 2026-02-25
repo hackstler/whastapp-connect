@@ -5,7 +5,6 @@ import QRCode from 'qrcode'
 import { adminAuth, type AppEnv, validateToken } from '../auth/auth.middleware'
 import { JwtService } from '../auth/jwt.service'
 import { authCookie, clearAuthCookie, getJwtFromRequest } from '../auth/token.utils'
-import { UserStore } from '../auth/user-store'
 import { logger } from '../../shared/logger'
 import type { WhatsAppListenerClient } from '../whatsapp/whatsapp-client'
 import type { RagAuthClient } from './rag-auth.client'
@@ -16,12 +15,8 @@ import { qrView } from './views/qr.view'
 export interface ServerOptions {
   /** Legacy API key — protege /qr y /logout (backward compat) */
   apiKey?: string
-  /** Secret para firmar/verificar JWT */
+  /** Secret para verificar los JWT emitidos por el backbone RAG. Debe ser el mismo JWT_SECRET del backbone. */
   jwtSecret: string
-  /** Nombre del usuario administrador */
-  adminUsername: string
-  /** Contraseña del usuario administrador (en claro; se hashea en memoria) */
-  adminPassword: string
   /** URL base de los endpoints de ingest del backbone RAG (p.ej. http://backbone:4000/ingest) */
   ragIngestUrl: string
   /** Cliente de auth compartido — gestiona JWT o X-API-Key automáticamente */
@@ -40,10 +35,12 @@ export function createServer(
   opts: ServerOptions,
 ): void {
   const jwtService = new JwtService(opts.jwtSecret)
-  const userStore = new UserStore(opts.adminUsername, opts.adminPassword)
 
   const jwtMiddleware = validateToken(jwtService)
   const legacyAuth = adminAuth(opts.apiKey, jwtService)
+
+  // URL de login del backbone RAG (p.ej. http://backbone:4000/auth/login)
+  const backboneLoginUrl = new URL('/auth/login', opts.ragIngestUrl).href
 
   const app = new Hono<AppEnv>()
 
@@ -70,6 +67,11 @@ export function createServer(
   })
 
   // ── Auth ──────────────────────────────────────────────────
+  /**
+   * Proxy al endpoint /auth/login del backbone RAG.
+   * El backbone valida las credenciales y devuelve su JWT (firmado con JWT_SECRET compartido).
+   * Ese token se usa directamente como sesión del dashboard.
+   */
   app.post('/auth/login', async (c) => {
     let username: unknown
     let password: unknown
@@ -88,19 +90,30 @@ export function createServer(
       return c.json({ error: 'password es requerido' }, 400)
     }
 
-    const user = userStore.verifyCredentials(username.trim(), password)
-    if (!user) {
+    let res: Response
+    try {
+      res = await fetch(backboneLoginUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password }),
+      })
+    } catch (err) {
+      logger.error('Error conectando al backbone RAG para login', { err })
+      return c.json({ error: 'Error de conexión con el backend RAG' }, 502)
+    }
+
+    if (res.status === 401) {
       return c.json({ error: 'Credenciales incorrectas' }, 401)
     }
 
-    const token = jwtService.sign({
-      userId: user.userId,
-      username: user.username,
-      orgId: user.orgId,
-      role: user.role,
-    })
+    if (!res.ok) {
+      logger.warn('Backbone auth error', { status: res.status })
+      return c.json({ error: 'Error en el backend RAG', backbone_status: res.status }, 502)
+    }
 
-    logger.info('Login exitoso', { username: user.username })
+    const data = await res.json() as { token: string }
+    const token = data.token
+    logger.info('Login exitoso via backbone', { username: username.trim() })
     c.header('Set-Cookie', authCookie(token, 7 * 24 * 60 * 60))
     return c.json({ token })
   })

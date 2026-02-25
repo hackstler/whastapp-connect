@@ -23,12 +23,8 @@ const ConfigSchema = z.object({
   /** Contraseña del usuario admin del backend RAG */
   RAG_PASSWORD: z.string().min(8).optional(),
   // ── Auth & dashboard ──────────────────────────────────────
-  /** Secret para firmar/verificar JWT. Mínimo 16 caracteres. */
+  /** Secret para verificar JWTs emitidos por el backbone RAG. Debe coincidir con JWT_SECRET del backbone. */
   JWT_SECRET: z.string().min(16),
-  /** Usuario administrador por defecto */
-  ADMIN_USERNAME: z.string().min(1).default('admin'),
-  /** Contraseña del admin por defecto (se hashea al arrancar) */
-  ADMIN_PASSWORD: z.string().min(8),
   /** URL del endpoint /ingest del backend RAG */
   RAG_INGEST_URL: z.string().url(),
   /** Si está activo, /api/ingest/{url,file} responden mock sin llamar al backbone */

@@ -26,8 +26,6 @@ async function main(): Promise<void> {
   createServer(config.PORT, whatsappClient, {
     apiKey: config.API_KEY,
     jwtSecret: config.JWT_SECRET,
-    adminUsername: config.ADMIN_USERNAME,
-    adminPassword: config.ADMIN_PASSWORD,
     ragIngestUrl: config.RAG_INGEST_URL,
     ragAuth,
     ragIngestMockEnabled: config.RAG_INGEST_MOCK_ENABLED,

@@ -1,5 +1,17 @@
 type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
+function serializeMeta(meta: unknown): unknown {
+  if (meta instanceof Error) {
+    return { message: meta.message, stack: meta.stack, name: meta.name }
+  }
+  if (meta !== null && typeof meta === 'object') {
+    return Object.fromEntries(
+      Object.entries(meta as Record<string, unknown>).map(([k, v]) => [k, serializeMeta(v)])
+    )
+  }
+  return meta
+}
+
 const LOG_LEVELS: Record<LogLevel, number> = {
   debug: 0,
   info: 1,
@@ -16,7 +28,7 @@ function log(level: LogLevel, message: string, meta?: unknown): void {
     timestamp: new Date().toISOString(),
     level,
     message,
-    ...(meta !== undefined ? { meta } : {}),
+    ...(meta !== undefined ? { meta: serializeMeta(meta) } : {}),
   }
 
   const line = JSON.stringify(entry) + '\n'
