@@ -12,10 +12,12 @@ export class WhatsAppListenerClient {
    */
   private selfChatId: string | null = null
   /**
-   * Cuerpos de respuestas RAG pendientes de ignorar.
-   * Se registran ANTES de enviar para evitar la race condition con message_create.
+   * IDs de mensajes enviados por el bot como respuesta RAG.
+   * Se registra el ID devuelto por sendMessage para ignorar el message_create
+   * correspondiente. Usar IDs (no bodies) evita falsos positivos cuando
+   * el agente repite el mismo texto en respuestas distintas.
    */
-  private readonly pendingReplies = new Set<string>()
+  private readonly pendingReplyIds = new Set<string>()
 
   /** Último QR recibido. null cuando ya está autenticado o aún no ha llegado. */
   public currentQr: string | null = null
@@ -74,9 +76,9 @@ export class WhatsAppListenerClient {
     if (!this.isSelfChat(msg)) return
     if (!msg.body.trim()) return
 
-    // Ignorar mensajes que el bot envió como respuesta RAG (registrados antes del envío)
-    if (this.pendingReplies.has(msg.body)) {
-      this.pendingReplies.delete(msg.body)
+    // Ignorar mensajes que el bot envió como respuesta RAG (identificados por ID único)
+    if (this.pendingReplyIds.has(msg.id._serialized)) {
+      this.pendingReplyIds.delete(msg.id._serialized)
       return
     }
 
@@ -91,9 +93,9 @@ export class WhatsAppListenerClient {
     try {
       const answer = await this.processMessage.execute(message)
       if (answer && this.selfChatId) {
-        this.pendingReplies.add(answer)
-        await this.client.sendMessage(this.selfChatId, answer)
-        logger.debug('Respuesta enviada al self-chat', { messageId: msg.id._serialized })
+        const sent = await this.client.sendMessage(this.selfChatId, answer)
+        this.pendingReplyIds.add(sent.id._serialized)
+        logger.debug('Respuesta enviada al self-chat', { messageId: msg.id._serialized, sentId: sent.id._serialized })
       }
     } catch (error) {
       logger.error('Error procesando mensaje', { error, messageId: msg.id._serialized })
