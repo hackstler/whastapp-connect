@@ -1,6 +1,7 @@
 import type { WhatsAppMessage } from '../../domain/entities/whatsapp-message.entity'
 import type { IngestPort } from '../../domain/ports/ingest.port'
 import { logger } from '../../shared/logger'
+import type { RagAuthClient } from './rag-auth.client'
 
 export class RagIngestAdapter implements IngestPort {
   /** conversationId persistido en memoria por chatId para mantener el hilo */
@@ -8,7 +9,7 @@ export class RagIngestAdapter implements IngestPort {
 
   constructor(
     private readonly chatUrl: string,
-    private readonly apiKey?: string,
+    private readonly auth: RagAuthClient,
   ) {}
 
   async ingest(message: WhatsAppMessage): Promise<string | null> {
@@ -20,22 +21,12 @@ export class RagIngestAdapter implements IngestPort {
       body['conversationId'] = conversationId
     }
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (this.apiKey) headers['X-API-Key'] = this.apiKey
-
-    const response = await fetch(this.chatUrl, {
+    const response = await this.fetchWithAuth(this.chatUrl, {
       method: 'POST',
-      headers,
       body: JSON.stringify(body),
     })
 
-    if (!response.ok) {
-      logger.warn('Chat endpoint returned non-OK', {
-        status: response.status,
-        messageId: message.id,
-      })
-      return null
-    }
+    if (!response) return null
 
     try {
       const data = await response.json() as Record<string, unknown>
@@ -64,5 +55,38 @@ export class RagIngestAdapter implements IngestPort {
       logger.warn('No se pudo parsear la respuesta del chat endpoint', { messageId: message.id })
       return null
     }
+  }
+
+  /**
+   * fetch con auth automática. Si el servidor devuelve 401, re-login y reintenta una vez.
+   * Exportado para que server.ts pueda reutilizarlo en las rutas de ingest.
+   */
+  async fetchWithAuth(
+    url: string,
+    init: Omit<RequestInit, 'headers'> & { headers?: Record<string, string> },
+  ): Promise<Response | null> {
+    const authHeaders = await this.auth.getHeaders()
+    const headers = { 'Content-Type': 'application/json', ...authHeaders, ...init.headers }
+
+    let response = await fetch(url, { ...init, headers })
+
+    if (response.status === 401) {
+      logger.warn('[rag-auth] 401 recibido — re-login y reintento')
+      try {
+        await this.auth.relogin()
+        const retryHeaders = { 'Content-Type': 'application/json', ...await this.auth.getHeaders(), ...init.headers }
+        response = await fetch(url, { ...init, headers: retryHeaders })
+      } catch (err) {
+        logger.error('[rag-auth] Re-login fallido', { err })
+        return null
+      }
+    }
+
+    if (!response.ok) {
+      logger.warn('RAG backend returned non-OK', { status: response.status, url })
+      return null
+    }
+
+    return response
   }
 }
