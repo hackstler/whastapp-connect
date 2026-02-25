@@ -2,7 +2,7 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import QRCode from 'qrcode'
 
-import { adminAuth, type AppEnv, validateToken } from '../auth/auth.middleware'
+import { type AppEnv, validateToken } from '../auth/auth.middleware'
 import { JwtService } from '../auth/jwt.service'
 import { authCookie, clearAuthCookie, getJwtFromRequest } from '../auth/token.utils'
 import { logger } from '../../shared/logger'
@@ -13,16 +13,12 @@ import { loginView } from './views/login.view'
 import { qrView } from './views/qr.view'
 
 export interface ServerOptions {
-  /** Legacy API key — protege /qr y /logout (backward compat) */
-  apiKey?: string
   /** Secret para verificar los JWT emitidos por el backbone RAG. Debe ser el mismo JWT_SECRET del backbone. */
   jwtSecret: string
-  /** URL base de los endpoints de ingest del backbone RAG (p.ej. http://backbone:4000/ingest) */
-  ragIngestUrl: string
-  /** Cliente de auth compartido — gestiona JWT o X-API-Key automáticamente */
+  /** URL base del backbone RAG sin path ni slash final (p.ej. https://backbone.railway.app) */
+  ragHost: string
+  /** Cliente de auth compartido — firma JWT de servicio con JWT_SECRET */
   ragAuth: RagAuthClient
-  /** @deprecated Usar ragAuth. Mantenido por compatibilidad. */
-  ragApiKey?: string
   /** Si está activo, /api/ingest/{url,file} responden mock */
   ragIngestMockEnabled?: boolean
   /** Latencia artificial para respuestas mock */
@@ -37,10 +33,9 @@ export function createServer(
   const jwtService = new JwtService(opts.jwtSecret)
 
   const jwtMiddleware = validateToken(jwtService)
-  const legacyAuth = adminAuth(opts.apiKey, jwtService)
 
-  // URL de login del backbone RAG (p.ej. http://backbone:4000/auth/login)
-  const backboneLoginUrl = new URL('/auth/login', opts.ragIngestUrl).href
+  const backboneLoginUrl = `${opts.ragHost}/auth/login`
+  const backboneIngestUrl = `${opts.ragHost}/ingest`
 
   const app = new Hono<AppEnv>()
 
@@ -213,7 +208,7 @@ export function createServer(
         const authHeaders = await opts.ragAuth.getHeaders()
         const headers = { 'Content-Type': 'application/json', ...authHeaders }
 
-        let res = await fetch(`${opts.ragIngestUrl}/url`, {
+        let res = await fetch(`${backboneIngestUrl}/url`, {
           method: 'POST',
           headers,
           body: JSON.stringify({ url }),
@@ -222,7 +217,7 @@ export function createServer(
         if (res.status === 401) {
           await opts.ragAuth.relogin()
           const retryHeaders = { 'Content-Type': 'application/json', ...await opts.ragAuth.getHeaders() }
-          res = await fetch(`${opts.ragIngestUrl}/url`, { method: 'POST', headers: retryHeaders, body: JSON.stringify({ url }) })
+          res = await fetch(`${backboneIngestUrl}/url`, { method: 'POST', headers: retryHeaders, body: JSON.stringify({ url }) })
         }
 
         if (!res.ok) {
@@ -307,12 +302,12 @@ export function createServer(
 
     let res: Response
     try {
-      res = await fetch(`${opts.ragIngestUrl}/file`, { method: 'POST', headers: forwardHeaders, body: rawBody })
+      res = await fetch(`${backboneIngestUrl}/file`, { method: 'POST', headers: forwardHeaders, body: rawBody })
 
       if (res.status === 401) {
         await opts.ragAuth.relogin()
         const retryHeaders = { 'content-type': contentType, ...await opts.ragAuth.getHeaders() }
-        res = await fetch(`${opts.ragIngestUrl}/file`, { method: 'POST', headers: retryHeaders, body: rawBody })
+        res = await fetch(`${backboneIngestUrl}/file`, { method: 'POST', headers: retryHeaders, body: rawBody })
       }
     } catch (err) {
       logger.error('Error reenviando fichero al backbone', { err })
@@ -330,7 +325,7 @@ export function createServer(
   })
 
   // ── Admin — requiere JWT o API key legacy ─────────────────
-  app.get('/qr', legacyAuth, async (c) => {
+  app.get('/qr', jwtMiddleware, async (c) => {
     if (whatsapp.isReady) {
       return c.html(qrView({ status: 'connected' }))
     }
@@ -344,7 +339,7 @@ export function createServer(
     return c.html(qrView({ status: 'waiting_qr', qrDataUrl: dataUrl, refreshSeconds: 15 }))
   })
 
-  app.post('/logout', legacyAuth, async (c) => {
+  app.post('/logout', jwtMiddleware, async (c) => {
     await whatsapp.logout()
     return c.json({ ok: true, message: 'Sesión cerrada. Reinicia el servicio para vincular de nuevo.' })
   })

@@ -9,24 +9,15 @@ const BoolFromEnv = z.preprocess((value) => {
 }, z.boolean())
 
 const ConfigSchema = z.object({
-  INGEST_URL: z.string().url(),
+  /** URL base del rag-agent-backbone, sin path ni slash final. Ej: https://backbone.railway.app */
+  RAG_HOST: z.string().url().transform((v) => v.replace(/\/$/, '')),
   SESSION_PATH: z.string().default('.wwebjs_auth'),
   DEDUP_TTL_MS: z.coerce.number().int().positive().default(300_000),
   DEDUP_MAX_SIZE: z.coerce.number().int().positive().default(1000),
   PORT: z.coerce.number().int().positive().default(3001),
-  /** Si se define, los endpoints /qr y /logout exigen X-API-Key: <valor> */
-  API_KEY: z.string().min(1).optional(),
-  /** API key del backend RAG — fallback legacy, se envía como X-API-Key */
-  RAG_API_KEY: z.string().min(1).optional(),
-  /** Usuario admin del backend RAG para autenticación JWT (preferido sobre RAG_API_KEY) */
-  RAG_USERNAME: z.string().min(1).optional(),
-  /** Contraseña del usuario admin del backend RAG */
-  RAG_PASSWORD: z.string().min(8).optional(),
   // ── Auth & dashboard ──────────────────────────────────────
   /** Secret para verificar JWTs emitidos por el backbone RAG. Debe coincidir con JWT_SECRET del backbone. */
   JWT_SECRET: z.string().min(16),
-  /** URL del endpoint /ingest del backend RAG */
-  RAG_INGEST_URL: z.string().url(),
   /** Si está activo, /api/ingest/{url,file} responden mock sin llamar al backbone */
   RAG_INGEST_MOCK_ENABLED: BoolFromEnv.default(false),
   /** Latencia artificial del mock de ingest (ms) */

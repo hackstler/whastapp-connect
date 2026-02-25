@@ -1,56 +1,30 @@
+import jwt from 'jsonwebtoken'
+
 import { logger } from '../../shared/logger'
 
 /**
- * Gestiona la autenticación JWT contra el backend RAG.
- * Login lazy en la primera petición; re-login automático en 401.
- *
- * Si se provee apiKey usa X-API-Key (fallback legacy).
- * Si se proveen username + password usa Bearer JWT.
- * Si no hay nada, no añade cabecera de auth (modo dev).
+ * Genera un JWT de servicio firmado con el JWT_SECRET compartido con el backbone.
+ * El backbone lo acepta porque verifica con el mismo secret.
+ * No requiere credenciales de usuario — el único secreto necesario es JWT_SECRET.
  */
 export class RagAuthClient {
-  private token: string | null = null
-  private readonly authUrl: string
+  private readonly token: string
 
-  constructor(
-    baseUrl: string,
-    private readonly username?: string,
-    private readonly password?: string,
-    private readonly apiKey?: string,
-  ) {
-    this.authUrl = new URL('/auth/login', baseUrl).href
+  constructor(jwtSecret: string) {
+    this.token = jwt.sign(
+      { userId: 'whatsapp-rag', username: 'whatsapp-rag', orgId: 'system', role: 'admin' },
+      jwtSecret,
+      { expiresIn: '365d' },
+    )
+    logger.info('[rag-auth] Service JWT generado')
   }
 
   async getHeaders(): Promise<Record<string, string>> {
-    if (this.apiKey) {
-      return { 'X-API-Key': this.apiKey }
-    }
-    if (!this.username || !this.password) {
-      return {}
-    }
-    if (!this.token) {
-      await this.login()
-    }
-    return { 'Authorization': `Bearer ${this.token}` }
+    return { Authorization: `Bearer ${this.token}` }
   }
 
-  /** Fuerza un nuevo login (llamar cuando el backend devuelve 401). */
+  /** No-op: el token de servicio es de larga duración. Un 401 indica JWT_SECRET incorrecto. */
   async relogin(): Promise<void> {
-    this.token = null
-    await this.login()
-  }
-
-  private async login(): Promise<void> {
-    const res = await fetch(this.authUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: this.username, password: this.password }),
-    })
-    if (!res.ok) {
-      throw new Error(`RAG auth failed (${res.status}) — check RAG_USERNAME/RAG_PASSWORD`)
-    }
-    const data = await res.json() as { token: string }
-    this.token = data.token
-    logger.info('[rag-auth] Authenticated with RAG backend')
+    logger.error('[rag-auth] 401 recibido — verifica que JWT_SECRET coincide con el backbone')
   }
 }

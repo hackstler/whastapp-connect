@@ -1,6 +1,5 @@
 import { Client, LocalAuth } from 'whatsapp-web.js'
 import type { Message } from 'whatsapp-web.js'
-import qrTerminal from 'qrcode-terminal'
 
 import type { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
 import { logger } from '../../shared/logger'
@@ -41,8 +40,7 @@ export class WhatsAppListenerClient {
     this.client.on('qr', (qr) => {
       this.currentQr = qr
       this.isReady = false
-      qrTerminal.generate(qr, { small: true })
-      logger.info('QR generado — escanea con WhatsApp móvil o abre /qr en el navegador')
+      logger.info('QR generado — abre /qr en el navegador para escanearlo')
     })
 
     this.client.on('ready', () => {

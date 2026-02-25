@@ -10,23 +10,17 @@ import { logger } from './shared/logger'
 async function main(): Promise<void> {
   // Composition root — DI manual
 
-  // Auth client compartido: usa Bearer JWT si hay RAG_USERNAME+RAG_PASSWORD, X-API-Key como fallback
-  const ragAuth = new RagAuthClient(
-    config.INGEST_URL,
-    config.RAG_USERNAME,
-    config.RAG_PASSWORD,
-    config.RAG_API_KEY,
-  )
+  // Auth client compartido: firma un JWT de servicio con el JWT_SECRET compartido con el backbone
+  const ragAuth = new RagAuthClient(config.JWT_SECRET)
 
   const dedup = new LruDedupCache(config.DEDUP_MAX_SIZE, config.DEDUP_TTL_MS)
-  const ingestAdapter = new RagIngestAdapter(config.INGEST_URL, ragAuth)
+  const ingestAdapter = new RagIngestAdapter(`${config.RAG_HOST}/chat`, ragAuth)
   const processMessage = new ProcessMessageUseCase(ingestAdapter, dedup)
   const whatsappClient = new WhatsAppListenerClient(config.SESSION_PATH, processMessage)
 
   createServer(config.PORT, whatsappClient, {
-    apiKey: config.API_KEY,
     jwtSecret: config.JWT_SECRET,
-    ragIngestUrl: config.RAG_INGEST_URL,
+    ragHost: config.RAG_HOST,
     ragAuth,
     ragIngestMockEnabled: config.RAG_INGEST_MOCK_ENABLED,
     ragIngestMockDelayMs: config.RAG_INGEST_MOCK_DELAY_MS,
