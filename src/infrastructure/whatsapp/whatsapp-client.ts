@@ -2,7 +2,6 @@ import { Client, LocalAuth } from 'whatsapp-web.js'
 import type { Message } from 'whatsapp-web.js'
 
 import type { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
-import type { DedupPort } from '../../domain/ports/dedup.port'
 import { logger } from '../../shared/logger'
 
 export class WhatsAppListenerClient {
@@ -18,16 +17,21 @@ export class WhatsAppListenerClient {
   /** true cuando el cliente está listo y conectado a WhatsApp. */
   public isReady = false
 
+  /**
+   * Dedup de respuestas enviadas por el bot basado en CUERPO + TTL.
+   *
+   * En Android multi-device (whatsapp-web.js), el ID que devuelve sendMessage()
+   * NO coincide con msg.id.id del evento message_create posterior para el mismo
+   * mensaje. El cuerpo del mensaje sí es idéntico en ambos lados, por lo que
+   * es la única propiedad fiable para detectar respuestas propias del bot.
+   *
+   * Map<body, expiresAtMs> — nunca se borra al hacer match, expira por TTL.
+   */
+  private readonly sentBodies = new Map<string, number>()
+
   constructor(
     sessionPath: string,
     private readonly processMessage: ProcessMessageUseCase,
-    /**
-     * Cache de dedup para respuestas enviadas por el bot.
-     * Usa msg.id.id (ID crudo sin prefijos fromMe/remote) para ser consistente
-     * entre iOS y Android multi-device, donde _serialized puede diferir.
-     * El TTL lo gestiona LruDedupCache internamente — sin setTimeout manual.
-     */
-    private readonly replyDedup: DedupPort,
   ) {
     this.client = new Client({
       authStrategy: new LocalAuth({ dataPath: sessionPath }),
@@ -79,18 +83,23 @@ export class WhatsAppListenerClient {
     if (!msg.body.trim()) return
 
     /**
-     * Usamos msg.id.id (ID crudo) en lugar de msg.id._serialized.
-     * _serialized incluye prefijos "fromMe_remote_" que en Android multi-device
-     * pueden diferir entre lo que devuelve sendMessage() y lo que llega en el evento,
-     * rompiendo el dedup. El ID crudo es estable en todos los dispositivos.
+     * Dedup por cuerpo: si este cuerpo coincide con una respuesta reciente del bot
+     * (aún dentro del TTL), es el eco de nuestro propio sendMessage() llegando
+     * como evento message_create. Lo descartamos.
+     *
+     * No usamos msg.id.id porque en Android multi-device el ID que devuelve
+     * sendMessage() es distinto al que llega en el evento posterior — confirmado
+     * en producción. El cuerpo es la única propiedad garantizada idéntica.
      */
-    const rawId = msg.id.id
-
-    if (this.replyDedup.isDuplicate(rawId)) {
-      logger.debug('Ignorando mensaje propio del bot (dedup)', { rawId })
+    const bodyExpiry = this.sentBodies.get(msg.body)
+    if (bodyExpiry !== undefined && Date.now() < bodyExpiry) {
+      logger.debug('Ignorando respuesta propia del bot (body dedup)', {
+        bodyPrefix: msg.body.slice(0, 40),
+      })
       return
     }
 
+    const rawId = msg.id.id
     const message = {
       id: rawId,
       body: msg.body,
@@ -103,11 +112,22 @@ export class WhatsAppListenerClient {
       const answer = await this.processMessage.execute(message)
       if (answer && this.selfChatId) {
         const sent = await this.client.sendMessage(this.selfChatId, answer)
-        this.replyDedup.markSeen(sent.id.id)
+        // Registrar el cuerpo enviado con TTL de 60 s.
+        // Nunca borramos en el match — expiramos por timestamp.
+        this.sentBodies.set(answer, Date.now() + 60_000)
+        this.purgeExpiredBodies()
         logger.debug('Respuesta enviada', { incomingId: rawId, sentId: sent.id.id })
       }
     } catch (error) {
       logger.error('Error procesando mensaje', { error, rawId })
+    }
+  }
+
+  /** Elimina entradas expiradas del mapa sentBodies para evitar memory leak. */
+  private purgeExpiredBodies(): void {
+    const now = Date.now()
+    for (const [body, exp] of this.sentBodies) {
+      if (now > exp) this.sentBodies.delete(body)
     }
   }
 

@@ -15,13 +15,13 @@ async function main(): Promise<void> {
 
   // Dedup de mensajes entrantes (evita procesar el mismo mensaje dos veces)
   const incomingDedup = new LruDedupCache(config.DEDUP_MAX_SIZE, config.DEDUP_TTL_MS)
-  // Dedup de respuestas enviadas por el bot (evita procesar la propia respuesta como query)
-  // TTL de 60 s — suficiente para absorber cualquier evento duplicado de sync multi-device
-  const replyDedup = new LruDedupCache(500, 60_000)
 
   const ingestAdapter = new RagIngestAdapter(`${config.RAG_HOST}/chat`, ragAuth)
   const processMessage = new ProcessMessageUseCase(ingestAdapter, incomingDedup)
-  const whatsappClient = new WhatsAppListenerClient(config.SESSION_PATH, processMessage, replyDedup)
+  // El dedup de respuestas propias del bot se maneja internamente en WhatsAppListenerClient
+  // mediante un Map<body, expiresAt> — no depende de IDs porque en Android multi-device
+  // el ID de sendMessage() ≠ ID en el evento message_create del mismo mensaje.
+  const whatsappClient = new WhatsAppListenerClient(config.SESSION_PATH, processMessage)
 
   createServer(config.PORT, whatsappClient, {
     jwtSecret: config.JWT_SECRET,
