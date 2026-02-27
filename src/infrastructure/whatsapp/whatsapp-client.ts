@@ -111,11 +111,17 @@ export class WhatsAppListenerClient {
     try {
       const answer = await this.processMessage.execute(message)
       if (answer && this.selfChatId) {
-        const sent = await this.client.sendMessage(this.selfChatId, answer)
-        // Registrar el cuerpo enviado con TTL de 60 s.
-        // Nunca borramos en el match — expiramos por timestamp.
+        /**
+         * CRÍTICO: registrar el cuerpo ANTES de llamar a sendMessage().
+         *
+         * En whatsapp-web.js, el evento message_create para el mensaje enviado
+         * puede llegar MIENTRAS sendMessage() está en await (i.e., antes de que
+         * la Promise resuelva). Si registramos después, handleOutgoing ya habrá
+         * procesado la propia respuesta del bot — bucle infinito garantizado.
+         */
         this.sentBodies.set(answer, Date.now() + 60_000)
         this.purgeExpiredBodies()
+        const sent = await this.client.sendMessage(this.selfChatId, answer)
         logger.debug('Respuesta enviada', { incomingId: rawId, sentId: sent.id.id })
       }
     } catch (error) {
