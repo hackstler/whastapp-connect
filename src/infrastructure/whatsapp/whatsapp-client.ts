@@ -2,6 +2,7 @@ import { Client, LocalAuth } from 'whatsapp-web.js'
 import type { Message } from 'whatsapp-web.js'
 
 import type { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
+import type { DedupPort } from '../../domain/ports/dedup.port'
 import { logger } from '../../shared/logger'
 
 export class WhatsAppListenerClient {
@@ -11,13 +12,6 @@ export class WhatsAppListenerClient {
    * Se asigna en el evento 'ready'. Mientras sea null se descartan mensajes.
    */
   private selfChatId: string | null = null
-  /**
-   * IDs de mensajes enviados por el bot como respuesta RAG.
-   * Se registra el ID devuelto por sendMessage para ignorar el message_create
-   * correspondiente. Usar IDs (no bodies) evita falsos positivos cuando
-   * el agente repite el mismo texto en respuestas distintas.
-   */
-  private readonly pendingReplyIds = new Set<string>()
 
   /** Último QR recibido. null cuando ya está autenticado o aún no ha llegado. */
   public currentQr: string | null = null
@@ -27,6 +21,13 @@ export class WhatsAppListenerClient {
   constructor(
     sessionPath: string,
     private readonly processMessage: ProcessMessageUseCase,
+    /**
+     * Cache de dedup para respuestas enviadas por el bot.
+     * Usa msg.id.id (ID crudo sin prefijos fromMe/remote) para ser consistente
+     * entre iOS y Android multi-device, donde _serialized puede diferir.
+     * El TTL lo gestiona LruDedupCache internamente — sin setTimeout manual.
+     */
+    private readonly replyDedup: DedupPort,
   ) {
     this.client = new Client({
       authStrategy: new LocalAuth({ dataPath: sessionPath }),
@@ -59,8 +60,9 @@ export class WhatsAppListenerClient {
     })
 
     /**
-     * message_create: se dispara para TODOS los mensajes que tú escribes,
-     * en cualquier chat. Filtramos solo el self-chat (msg.to === selfChatId).
+     * message_create: se dispara para TODOS los mensajes que el usuario escribe,
+     * en cualquier chat (incluyendo sync de dispositivos vinculados).
+     * Filtramos solo el self-chat y excluimos las respuestas del propio bot.
      */
     this.client.on('message_create', (msg: Message) => {
       void this.handleOutgoing(msg)
@@ -76,14 +78,21 @@ export class WhatsAppListenerClient {
     if (!this.isSelfChat(msg)) return
     if (!msg.body.trim()) return
 
-    // Ignorar mensajes que el bot envió como respuesta RAG (identificados por ID único)
-    if (this.pendingReplyIds.has(msg.id._serialized)) {
-      this.pendingReplyIds.delete(msg.id._serialized)
+    /**
+     * Usamos msg.id.id (ID crudo) en lugar de msg.id._serialized.
+     * _serialized incluye prefijos "fromMe_remote_" que en Android multi-device
+     * pueden diferir entre lo que devuelve sendMessage() y lo que llega en el evento,
+     * rompiendo el dedup. El ID crudo es estable en todos los dispositivos.
+     */
+    const rawId = msg.id.id
+
+    if (this.replyDedup.isDuplicate(rawId)) {
+      logger.debug('Ignorando mensaje propio del bot (dedup)', { rawId })
       return
     }
 
     const message = {
-      id: msg.id._serialized,
+      id: rawId,
       body: msg.body,
       timestamp: msg.timestamp,
       chatId: msg.from,
@@ -94,21 +103,23 @@ export class WhatsAppListenerClient {
       const answer = await this.processMessage.execute(message)
       if (answer && this.selfChatId) {
         const sent = await this.client.sendMessage(this.selfChatId, answer)
-        this.pendingReplyIds.add(sent.id._serialized)
-        logger.debug('Respuesta enviada al self-chat', { messageId: msg.id._serialized, sentId: sent.id._serialized })
+        this.replyDedup.markSeen(sent.id.id)
+        logger.debug('Respuesta enviada', { incomingId: rawId, sentId: sent.id.id })
       }
     } catch (error) {
-      logger.error('Error procesando mensaje', { error, messageId: msg.id._serialized })
+      logger.error('Error procesando mensaje', { error, rawId })
     }
   }
 
   /**
-   * Un mensaje es del chat "Message Yourself" cuando
-   * tú eres el emisor Y el destinatario es tu propio JID.
+   * Un mensaje pertenece al self-chat cuando el destinatario es el propio JID.
+   * Normaliza el JID (solo la parte numérica antes de @) para absorber variaciones
+   * de formato entre iOS y Android multi-device.
    */
   private isSelfChat(msg: Message): boolean {
     if (this.selfChatId === null) return false
-    return msg.to === this.selfChatId
+    const normalize = (jid: string) => jid.split('@')[0] ?? jid
+    return normalize(msg.to) === normalize(this.selfChatId)
   }
 
   async start(): Promise<void> {
@@ -121,10 +132,6 @@ export class WhatsAppListenerClient {
     await this.client.destroy()
   }
 
-  /**
-   * Cierra la sesión de WhatsApp y borra las credenciales locales.
-   * Después de llamar a esto hay que reiniciar el servicio para escanear un QR nuevo.
-   */
   async logout(): Promise<void> {
     logger.info('Cerrando sesión de WhatsApp...')
     this.isReady = false
