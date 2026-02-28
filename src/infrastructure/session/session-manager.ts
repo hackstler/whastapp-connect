@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 
 import type { Config } from '../../shared/config'
@@ -23,6 +24,10 @@ export class SessionManager {
   }
 
   async start(): Promise<void> {
+    // Migrate legacy single-org session layout to multi-org layout.
+    // Old: SESSION_BASE_PATH/session/  →  New: SESSION_BASE_PATH/<orgId>/session/
+    await this.migrateLegacySession()
+
     // Initial sync
     await this.syncOrgs()
 
@@ -84,6 +89,40 @@ export class SessionManager {
 
     // NOTE: we intentionally do NOT tear down orgs that disappeared from the list.
     // This prevents accidental disconnections if the backbone DB has a transient issue.
+  }
+
+  /**
+   * Migrate legacy single-org session to multi-org layout.
+   * Old layout: SESSION_BASE_PATH/session/
+   * New layout: SESSION_BASE_PATH/<orgId>/session/
+   *
+   * Detects the first org from the backbone and moves the old session there.
+   * Only runs once — if the old path doesn't exist, it's a no-op.
+   */
+  private async migrateLegacySession(): Promise<void> {
+    const oldSessionDir = path.join(this.config.SESSION_BASE_PATH, 'session')
+    if (!fs.existsSync(oldSessionDir)) return
+
+    // Ask backbone which orgs exist to find the right target
+    const orgIds = await this.backbone.getOrgs()
+    if (orgIds.length === 0) {
+      logger.warn('[migration] Legacy session found but no orgs from backbone — skipping migration')
+      return
+    }
+
+    // Use first org (in practice this is "hackstler" — the only org before multi-org)
+    const targetOrg = orgIds[0]!
+    const newOrgDir = path.join(this.config.SESSION_BASE_PATH, targetOrg)
+    const newSessionDir = path.join(newOrgDir, 'session')
+
+    if (fs.existsSync(newSessionDir)) {
+      logger.info('[migration] New session dir already exists — skipping', { targetOrg })
+      return
+    }
+
+    fs.mkdirSync(newOrgDir, { recursive: true })
+    fs.renameSync(oldSessionDir, newSessionDir)
+    logger.info('[migration] Migrated legacy session', { from: oldSessionDir, to: newSessionDir, orgId: targetOrg })
   }
 
   private async startOrgSession(orgId: string): Promise<void> {
