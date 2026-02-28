@@ -22,8 +22,19 @@ async function main(): Promise<void> {
 
   await whatsappClient.start()
 
+  // Heartbeat: re-report current status every 30s so the backbone
+  // recovers state after restarts or DB resets.
+  const heartbeat = setInterval(() => {
+    if (whatsappClient.isReady) {
+      void backbone.reportStatus('connected')
+    } else if (whatsappClient.currentQr) {
+      void backbone.reportQr(whatsappClient.currentQr)
+    }
+  }, 30_000)
+
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`${signal} received — graceful shutdown`)
+    clearInterval(heartbeat)
     await whatsappClient.stop()
     process.exit(0)
   }
