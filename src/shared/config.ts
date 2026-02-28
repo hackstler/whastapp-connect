@@ -1,13 +1,14 @@
 import { z } from 'zod'
 
 const ConfigSchema = z.object({
-  /** ID de la organización que sirve este worker */
-  ORG_ID: z.string().min(1),
   /** URL base del backbone API, sin slash final. Ej: https://backbone.railway.app */
   BACKBONE_URL: z.string().url().transform((v) => v.replace(/\/$/, '')),
   /** Secret compartido con el backbone para firmar JWT de servicio */
   JWT_SECRET: z.string().min(16),
-  SESSION_PATH: z.string().default('.wwebjs_auth'),
+  /** Base path for per-org session directories. Each org gets a subdirectory. */
+  SESSION_BASE_PATH: z.string().default('.wwebjs_auth'),
+  /** Interval (ms) to poll backbone for new orgs */
+  ORG_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   DEDUP_TTL_MS: z.coerce.number().int().positive().default(300_000),
   DEDUP_MAX_SIZE: z.coerce.number().int().positive().default(1000),
 })

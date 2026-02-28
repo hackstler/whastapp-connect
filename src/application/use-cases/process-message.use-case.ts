@@ -5,23 +5,25 @@ import { logger } from '../../shared/logger'
 
 export class ProcessMessageUseCase {
   constructor(
+    private readonly orgId: string,
     private readonly backbone: BackbonePort,
     private readonly dedup: DedupPort,
   ) {}
 
   async execute(message: WhatsAppMessage): Promise<string | null> {
     if (this.dedup.isDuplicate(message.id)) {
-      logger.debug('Skipping duplicate message', { messageId: message.id })
+      logger.debug('Skipping duplicate message', { orgId: this.orgId, messageId: message.id })
       return null
     }
 
     this.dedup.markSeen(message.id)
 
     logger.info('Processing message', {
+      orgId: this.orgId,
       messageId: message.id,
       preview: message.body.slice(0, 80),
     })
 
-    return this.backbone.sendMessage(message)
+    return this.backbone.sendMessage(this.orgId, message)
   }
 }
