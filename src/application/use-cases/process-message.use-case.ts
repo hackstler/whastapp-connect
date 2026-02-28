@@ -1,11 +1,11 @@
 import type { WhatsAppMessage } from '../../domain/entities/whatsapp-message.entity'
 import type { DedupPort } from '../../domain/ports/dedup.port'
-import type { IngestPort } from '../../domain/ports/ingest.port'
+import type { BackbonePort } from '../../domain/ports/ingest.port'
 import { logger } from '../../shared/logger'
 
 export class ProcessMessageUseCase {
   constructor(
-    private readonly ingest: IngestPort,
+    private readonly backbone: BackbonePort,
     private readonly dedup: DedupPort,
   ) {}
 
@@ -22,6 +22,6 @@ export class ProcessMessageUseCase {
       preview: message.body.slice(0, 80),
     })
 
-    return this.ingest.ingest(message)
+    return this.backbone.sendMessage(message)
   }
 }

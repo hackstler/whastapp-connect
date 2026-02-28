@@ -2,6 +2,7 @@ import { Client, LocalAuth } from 'whatsapp-web.js'
 import type { Message } from 'whatsapp-web.js'
 
 import type { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
+import type { BackboneClient } from '../http/backbone.client'
 import { logger } from '../../shared/logger'
 
 export class WhatsAppListenerClient {
@@ -32,6 +33,7 @@ export class WhatsAppListenerClient {
   constructor(
     sessionPath: string,
     private readonly processMessage: ProcessMessageUseCase,
+    private readonly backbone: BackboneClient,
   ) {
     this.client = new Client({
       authStrategy: new LocalAuth({ dataPath: sessionPath }),
@@ -47,7 +49,9 @@ export class WhatsAppListenerClient {
     this.client.on('qr', (qr) => {
       this.currentQr = qr
       this.isReady = false
-      logger.info('QR generado — abre /qr en el navegador para escanearlo')
+      logger.info('QR generated')
+      // Report QR to backbone so frontend can display it
+      void this.backbone.reportQr(qr)
     })
 
     this.client.on('ready', () => {
@@ -55,12 +59,16 @@ export class WhatsAppListenerClient {
       this.selfChatId = info.wid._serialized
       this.currentQr = null
       this.isReady = true
-      logger.info('WhatsApp client listo', { selfChatId: this.selfChatId })
+      logger.info('WhatsApp client ready', { selfChatId: this.selfChatId })
+      // Report connected status to backbone
+      void this.backbone.reportStatus('connected', info.pushname ?? undefined)
     })
 
     this.client.on('disconnected', (reason) => {
       this.isReady = false
-      logger.warn('WhatsApp desconectado', { reason })
+      logger.warn('WhatsApp disconnected', { reason })
+      // Report disconnected status to backbone
+      void this.backbone.reportStatus('disconnected')
     })
 
     /**
@@ -73,7 +81,7 @@ export class WhatsAppListenerClient {
     })
 
     this.client.on('auth_failure', (message) => {
-      logger.error('Fallo de autenticación WhatsApp', { message })
+      logger.error('WhatsApp auth failure', { message })
     })
   }
 
@@ -93,7 +101,7 @@ export class WhatsAppListenerClient {
      */
     const bodyExpiry = this.sentBodies.get(msg.body)
     if (bodyExpiry !== undefined && Date.now() < bodyExpiry) {
-      logger.debug('Ignorando respuesta propia del bot (body dedup)', {
+      logger.debug('Ignoring bot echo (body dedup)', {
         bodyPrefix: msg.body.slice(0, 40),
       })
       return
@@ -112,24 +120,24 @@ export class WhatsAppListenerClient {
       const answer = await this.processMessage.execute(message)
       if (answer && this.selfChatId) {
         /**
-         * CRÍTICO: registrar el cuerpo ANTES de llamar a sendMessage().
+         * CRITICAL: register body BEFORE calling sendMessage().
          *
-         * En whatsapp-web.js, el evento message_create para el mensaje enviado
-         * puede llegar MIENTRAS sendMessage() está en await (i.e., antes de que
-         * la Promise resuelva). Si registramos después, handleOutgoing ya habrá
-         * procesado la propia respuesta del bot — bucle infinito garantizado.
+         * In whatsapp-web.js, the message_create event for the sent message
+         * can arrive WHILE sendMessage() is awaiting (i.e., before the
+         * Promise resolves). If we register after, handleOutgoing will have
+         * already processed the bot's own response — infinite loop guaranteed.
          */
         this.sentBodies.set(answer, Date.now() + 60_000)
         this.purgeExpiredBodies()
         const sent = await this.client.sendMessage(this.selfChatId, answer)
-        logger.debug('Respuesta enviada', { incomingId: rawId, sentId: sent.id.id })
+        logger.debug('Reply sent', { incomingId: rawId, sentId: sent.id.id })
       }
     } catch (error) {
-      logger.error('Error procesando mensaje', { error, rawId })
+      logger.error('Error processing message', { error, rawId })
     }
   }
 
-  /** Elimina entradas expiradas del mapa sentBodies para evitar memory leak. */
+  /** Purge expired entries from sentBodies to avoid memory leak. */
   private purgeExpiredBodies(): void {
     const now = Date.now()
     for (const [body, exp] of this.sentBodies) {
@@ -138,9 +146,9 @@ export class WhatsAppListenerClient {
   }
 
   /**
-   * Un mensaje pertenece al self-chat cuando el destinatario es el propio JID.
-   * Normaliza el JID (solo la parte numérica antes de @) para absorber variaciones
-   * de formato entre iOS y Android multi-device.
+   * A message belongs to the self-chat when the recipient is the user's own JID.
+   * Normalizes the JID (only the numeric part before @) to absorb format
+   * variations between iOS and Android multi-device.
    */
   private isSelfChat(msg: Message): boolean {
     if (this.selfChatId === null) return false
@@ -149,25 +157,12 @@ export class WhatsAppListenerClient {
   }
 
   async start(): Promise<void> {
-    logger.info('Iniciando WhatsApp client...')
+    logger.info('Starting WhatsApp client...')
     await this.client.initialize()
   }
 
   async stop(): Promise<void> {
-    logger.info('Deteniendo WhatsApp client...')
+    logger.info('Stopping WhatsApp client...')
     await this.client.destroy()
-  }
-
-  async logout(): Promise<void> {
-    logger.info('Cerrando sesión de WhatsApp...')
-    this.isReady = false
-    this.currentQr = null
-    try {
-      await this.client.logout()
-    } catch {
-      // logout puede fallar si ya está desconectado; continuar de todas formas
-    }
-    await this.client.destroy()
-    logger.info('Sesión cerrada')
   }
 }
