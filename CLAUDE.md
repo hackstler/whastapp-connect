@@ -54,19 +54,20 @@ src/
 
 | Variable | Default | Descripción |
 |----------|---------|-------------|
-| `ORG_ID` | — | ID de la organización que sirve este worker (**requerido**) |
 | `BACKBONE_URL` | — | URL base del backbone API (**requerido**) |
 | `JWT_SECRET` | — | Secret compartido con el backbone para JWT (**requerido**) |
-| `SESSION_PATH` | `.wwebjs_auth` | Directorio de sesión WhatsApp |
+| `SESSION_BASE_PATH` | `.wwebjs_auth` | Directorio base para sesiones WhatsApp por usuario |
+| `SESSION_POLL_INTERVAL_MS` | `60000` | Intervalo de polling al backbone para nuevas sesiones |
 | `DEDUP_TTL_MS` | `300000` | TTL dedup cache en ms |
 | `DEDUP_MAX_SIZE` | `1000` | Tamaño máximo del cache LRU |
 | `LOG_LEVEL` | `info` | debug / info / warn / error |
 
 ## Session Persistence
 
-La sesión de WhatsApp se persiste en `SESSION_PATH` (ignorada por git).
+Cada usuario tiene su propia sesión en `SESSION_BASE_PATH/<userId>/session/` (ignorada por git).
 En producción: usar un volumen Docker persistente o EBS mount.
 Sin sesión previa: el worker genera un QR y lo reporta al backbone → el frontend lo muestra.
+El worker descubre sesiones activas haciendo polling a `GET /internal/whatsapp/sessions`.
 
 ## Key Constraints
 

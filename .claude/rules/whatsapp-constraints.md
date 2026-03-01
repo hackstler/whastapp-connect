@@ -54,7 +54,8 @@ const dedup = new LRUCache<string, true>({
 
 ## Session Persistence
 
-- Directorio: `.wwebjs_auth/` (configurable via `SESSION_PATH`)
+- Directorio base: `.wwebjs_auth/` (configurable via `SESSION_BASE_PATH`)
+- Cada usuario tiene su subdirectorio: `SESSION_BASE_PATH/<userId>/session/`
 - **Volumen persistente** en producción (Docker volume o EBS mount)
 - Si se pierde la sesión: el worker genera nuevo QR → lo reporta al backbone
 - `.wwebjs_auth/` está en `.gitignore` — NUNCA commitear

@@ -50,12 +50,13 @@ class BackboneClient {
 
 ```typescript
 const token = jwt.sign(
-  { role: "worker", orgId: config.ORG_ID },
+  { role: "worker" },
   config.JWT_SECRET,
 )
 ```
 
-- Se genera una vez al arrancar y se reutiliza
+- Se genera una vez al arrancar y se reutiliza (multi-user, sin orgId en el JWT)
+- El userId se pasa en el body de cada request, no en el JWT
 - Sin expiración (el backbone valida el secret, no la expiración)
 - Si el backbone rechaza (401/403), loggear error fatal y parar
 
