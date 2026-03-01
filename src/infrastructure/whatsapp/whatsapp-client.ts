@@ -197,6 +197,11 @@ export class WhatsAppListenerClient {
    * the "Default" profile subdirectory. Verified against LocalAuth source:
    *   sessionDirName = clientId ? `session-${clientId}` : 'session'
    *   userDataDir    = path.join(dataPath, sessionDirName)
+   *
+   * IMPORTANT: On Linux, SingletonLock is a SYMLINK (not a regular file).
+   * fs.existsSync() follows symlinks — when the old container is dead its target
+   * is gone, so existsSync returns false even though the dangling symlink exists.
+   * We must attempt unlink() directly and treat ENOENT as a no-op.
    */
   private clearStaleLocks(): void {
     const LOCAL_AUTH_SESSION_DIR = 'session'   // LocalAuth default: no clientId → "session"
@@ -206,12 +211,13 @@ export class WhatsAppListenerClient {
     for (const file of CHROMIUM_LOCK_FILES) {
       const lockPath = path.join(userDataDir, file)
       try {
-        if (fs.existsSync(lockPath)) {
-          fs.unlinkSync(lockPath)
-          logger.info('Cleared stale Chromium lock', { userId: this.userId, lockPath })
+        fs.unlinkSync(lockPath)
+        logger.info('Cleared stale Chromium lock', { userId: this.userId, lockPath })
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logger.warn('Could not clear Chromium lock', { userId: this.userId, lockPath, code: (err as NodeJS.ErrnoException).code })
         }
-      } catch {
-        // Non-fatal: if deletion fails, Chromium will surface the error itself
+        // ENOENT = no stale lock, normal case — skip silently
       }
     }
   }
