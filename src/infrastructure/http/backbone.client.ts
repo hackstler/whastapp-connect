@@ -1,7 +1,8 @@
 import jwt from 'jsonwebtoken'
 
 import type { WhatsAppMessage } from '../../domain/entities/whatsapp-message.entity'
-import type { BackbonePort } from '../../domain/ports/ingest.port'
+import type { BackbonePort } from '../../domain/ports/backbone.port'
+import { BackboneUnavailableError } from '../../domain/errors/backbone-unavailable.error'
 import { logger } from '../../shared/logger'
 
 /**
@@ -96,8 +97,9 @@ export class BackboneClient implements BackbonePort {
    * Returns the agent's reply or null if unavailable.
    */
   async sendMessage(userId: string, message: WhatsAppMessage): Promise<string | null> {
+    let res: Response
     try {
-      const res = await fetch(`${this.baseUrl}/internal/whatsapp/message`, {
+      res = await fetch(`${this.baseUrl}/internal/whatsapp/message`, {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify({
@@ -108,17 +110,20 @@ export class BackboneClient implements BackbonePort {
         }),
         signal: AbortSignal.timeout(30_000),
       })
-
-      if (!res.ok) {
-        logger.warn('[backbone] sendMessage failed', { userId, status: res.status, messageId: message.id })
-        return null
-      }
-
-      const data = await res.json() as { data?: { reply?: string } }
-      return data?.data?.reply ?? null
     } catch (error) {
-      logger.error('[backbone] sendMessage error', { userId, error, messageId: message.id })
-      return null
+      throw new BackboneUnavailableError(
+        `[backbone] sendMessage network error for user ${userId}`,
+        error,
+      )
     }
+
+    if (!res.ok) {
+      throw new BackboneUnavailableError(
+        `[backbone] sendMessage HTTP ${res.status} for user ${userId}`,
+      )
+    }
+
+    const data = await res.json() as { data?: { reply?: string } }
+    return data?.data?.reply ?? null
   }
 }

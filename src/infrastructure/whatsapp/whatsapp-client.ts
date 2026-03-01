@@ -3,6 +3,8 @@ import type { Message } from 'whatsapp-web.js'
 
 import type { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
 import type { BackboneClient } from '../http/backbone.client'
+import { ConnectionError } from '../../domain/errors/connection.error'
+import { BackboneUnavailableError } from '../../domain/errors/backbone-unavailable.error'
 import { logger } from '../../shared/logger'
 
 export class WhatsAppListenerClient {
@@ -83,7 +85,8 @@ export class WhatsAppListenerClient {
     })
 
     this.client.on('auth_failure', (message) => {
-      logger.error('WhatsApp auth failure', { userId: this.userId, orgId: this.orgId, message })
+      const error = new ConnectionError(`WhatsApp auth failure: ${message}`)
+      logger.error('WhatsApp auth failure', { userId: this.userId, orgId: this.orgId, error: error.message })
     })
   }
 
@@ -137,7 +140,11 @@ export class WhatsAppListenerClient {
         logger.debug('Reply sent', { userId: this.userId, orgId: this.orgId, incomingId: rawId, sentId: sent.id.id })
       }
     } catch (error) {
-      logger.error('Error processing message', { userId: this.userId, orgId: this.orgId, error, rawId })
+      if (error instanceof BackboneUnavailableError) {
+        logger.error('Backbone unavailable while processing message', { userId: this.userId, orgId: this.orgId, error: error.message, rawId })
+      } else {
+        logger.error('Error processing message', { userId: this.userId, orgId: this.orgId, error, rawId })
+      }
     }
   }
 
@@ -162,11 +169,25 @@ export class WhatsAppListenerClient {
 
   async start(): Promise<void> {
     logger.info('Starting WhatsApp client...', { userId: this.userId, orgId: this.orgId })
-    await this.client.initialize()
+    try {
+      await this.client.initialize()
+    } catch (error) {
+      throw new ConnectionError(
+        `Failed to initialize WhatsApp client for user ${this.userId}`,
+        error,
+      )
+    }
   }
 
   async stop(): Promise<void> {
     logger.info('Stopping WhatsApp client...', { userId: this.userId, orgId: this.orgId })
-    await this.client.destroy()
+    try {
+      await this.client.destroy()
+    } catch (error) {
+      throw new ConnectionError(
+        `Failed to stop WhatsApp client for user ${this.userId}`,
+        error,
+      )
+    }
   }
 }

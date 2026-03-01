@@ -1,6 +1,6 @@
 import type { WhatsAppMessage } from '../../domain/entities/whatsapp-message.entity'
 import type { DedupPort } from '../../domain/ports/dedup.port'
-import type { BackbonePort } from '../../domain/ports/ingest.port'
+import type { BackbonePort } from '../../domain/ports/backbone.port'
 import { logger } from '../../shared/logger'
 
 export class ProcessMessageUseCase {
