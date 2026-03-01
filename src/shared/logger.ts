@@ -2,7 +2,12 @@ type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 function serializeMeta(meta: unknown): unknown {
   if (meta instanceof Error) {
-    return { message: meta.message, stack: meta.stack, name: meta.name }
+    return {
+      message: meta.message,
+      stack: meta.stack,
+      name: meta.name,
+      ...(meta.cause !== undefined ? { cause: serializeMeta(meta.cause) } : {}),
+    }
   }
   if (meta !== null && typeof meta === 'object') {
     return Object.fromEntries(
