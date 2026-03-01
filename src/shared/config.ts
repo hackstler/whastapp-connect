@@ -5,10 +5,10 @@ const ConfigSchema = z.object({
   BACKBONE_URL: z.string().url().transform((v) => v.replace(/\/$/, '')),
   /** Secret compartido con el backbone para firmar JWT de servicio */
   JWT_SECRET: z.string().min(16),
-  /** Base path for per-org session directories. Each org gets a subdirectory. */
+  /** Base path for per-user session directories. Each user gets a subdirectory. */
   SESSION_BASE_PATH: z.string().default('.wwebjs_auth'),
-  /** Interval (ms) to poll backbone for new orgs */
-  ORG_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  /** Interval (ms) to poll backbone for new user sessions */
+  SESSION_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   DEDUP_TTL_MS: z.coerce.number().int().positive().default(300_000),
   DEDUP_MAX_SIZE: z.coerce.number().int().positive().default(1000),
 })

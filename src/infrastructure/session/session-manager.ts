@@ -8,13 +8,14 @@ import { LruDedupCache } from '../cache/lru-dedup.cache'
 import { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
 import { WhatsAppListenerClient } from '../whatsapp/whatsapp-client'
 
-interface OrgSession {
+interface UserSession {
+  userId: string
   orgId: string
   whatsapp: WhatsAppListenerClient
 }
 
 export class SessionManager {
-  private readonly sessions = new Map<string, OrgSession>()
+  private readonly sessions = new Map<string, UserSession>()
   private readonly backbone: BackboneClient
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -24,32 +25,32 @@ export class SessionManager {
   }
 
   async start(): Promise<void> {
-    // Migrate legacy single-org session layout to multi-org layout.
-    // Old: SESSION_BASE_PATH/session/  →  New: SESSION_BASE_PATH/<orgId>/session/
+    // Migrate legacy single-org session layout to per-user layout.
+    // Old: SESSION_BASE_PATH/session/  →  New: SESSION_BASE_PATH/<userId>/session/
     await this.migrateLegacySession()
 
     // Initial sync
-    await this.syncOrgs()
+    await this.syncSessions()
 
-    // Poll for new orgs
+    // Poll for new sessions
     this.pollTimer = setInterval(() => {
-      void this.syncOrgs()
-    }, this.config.ORG_POLL_INTERVAL_MS)
+      void this.syncSessions()
+    }, this.config.SESSION_POLL_INTERVAL_MS)
 
     // Heartbeat: re-report current status every 30s
     this.heartbeatTimer = setInterval(() => {
       for (const session of this.sessions.values()) {
         if (session.whatsapp.isReady) {
-          void this.backbone.reportStatus(session.orgId, 'connected')
+          void this.backbone.reportStatus(session.userId, 'connected')
         } else if (session.whatsapp.currentQr) {
-          void this.backbone.reportQr(session.orgId, session.whatsapp.currentQr)
+          void this.backbone.reportQr(session.userId, session.whatsapp.currentQr)
         }
       }
     }, 30_000)
 
     logger.info('SessionManager started', {
-      orgCount: this.sessions.size,
-      pollIntervalMs: this.config.ORG_POLL_INTERVAL_MS,
+      sessionCount: this.sessions.size,
+      pollIntervalMs: this.config.SESSION_POLL_INTERVAL_MS,
     })
   }
 
@@ -57,14 +58,14 @@ export class SessionManager {
     if (this.pollTimer) clearInterval(this.pollTimer)
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
 
-    logger.info('Stopping all org sessions...', { orgCount: this.sessions.size })
+    logger.info('Stopping all user sessions...', { sessionCount: this.sessions.size })
 
     const stopPromises = Array.from(this.sessions.values()).map(async (session) => {
       try {
         await session.whatsapp.stop()
-        logger.info('Org session stopped', { orgId: session.orgId })
+        logger.info('User session stopped', { userId: session.userId, orgId: session.orgId })
       } catch (error) {
-        logger.error('Error stopping org session', { orgId: session.orgId, error })
+        logger.error('Error stopping user session', { userId: session.userId, orgId: session.orgId, error })
       }
     })
 
@@ -72,75 +73,75 @@ export class SessionManager {
     this.sessions.clear()
   }
 
-  async syncOrgs(): Promise<void> {
-    const orgIds = await this.backbone.getOrgs()
+  async syncSessions(): Promise<void> {
+    const entries = await this.backbone.getSessions()
 
-    if (orgIds.length === 0) {
-      logger.warn('No orgs returned from backbone')
+    if (entries.length === 0) {
+      logger.warn('No sessions returned from backbone')
       return
     }
 
-    // Start sessions for new orgs (sequentially to avoid launching N Chromiums at once)
-    for (const orgId of orgIds) {
-      if (!this.sessions.has(orgId)) {
-        await this.startOrgSession(orgId)
+    // Start sessions for new users (sequentially to avoid launching N Chromiums at once)
+    for (const { userId, orgId } of entries) {
+      if (!this.sessions.has(userId)) {
+        await this.startUserSession(userId, orgId)
       }
     }
 
-    // NOTE: we intentionally do NOT tear down orgs that disappeared from the list.
+    // NOTE: we intentionally do NOT tear down sessions that disappeared from the list.
     // This prevents accidental disconnections if the backbone DB has a transient issue.
   }
 
   /**
-   * Migrate legacy single-org session to multi-org layout.
+   * Migrate legacy single-org session to per-user layout.
    * Old layout: SESSION_BASE_PATH/session/
-   * New layout: SESSION_BASE_PATH/<orgId>/session/
+   * New layout: SESSION_BASE_PATH/<userId>/session/
    *
-   * Detects the first org from the backbone and moves the old session there.
+   * Detects the first user session from the backbone and moves the old session there.
    * Only runs once — if the old path doesn't exist, it's a no-op.
    */
   private async migrateLegacySession(): Promise<void> {
     const oldSessionDir = path.join(this.config.SESSION_BASE_PATH, 'session')
     if (!fs.existsSync(oldSessionDir)) return
 
-    // Ask backbone which orgs exist to find the right target
-    const orgIds = await this.backbone.getOrgs()
-    if (orgIds.length === 0) {
-      logger.warn('[migration] Legacy session found but no orgs from backbone — skipping migration')
+    // Ask backbone which sessions exist to find the right target
+    const entries = await this.backbone.getSessions()
+    if (entries.length === 0) {
+      logger.warn('[migration] Legacy session found but no sessions from backbone — skipping migration')
       return
     }
 
-    // Use first org (in practice this is "hackstler" — the only org before multi-org)
-    const targetOrg = orgIds[0]!
-    const newOrgDir = path.join(this.config.SESSION_BASE_PATH, targetOrg)
-    const newSessionDir = path.join(newOrgDir, 'session')
+    // Use first user (in practice this is the only user before per-user sessions)
+    const { userId: targetUserId } = entries[0]!
+    const newUserDir = path.join(this.config.SESSION_BASE_PATH, targetUserId)
+    const newSessionDir = path.join(newUserDir, 'session')
 
     if (fs.existsSync(newSessionDir)) {
-      logger.info('[migration] New session dir already exists — skipping', { targetOrg })
+      logger.info('[migration] New session dir already exists — skipping', { targetUserId })
       return
     }
 
-    fs.mkdirSync(newOrgDir, { recursive: true })
+    fs.mkdirSync(newUserDir, { recursive: true })
     fs.renameSync(oldSessionDir, newSessionDir)
-    logger.info('[migration] Migrated legacy session', { from: oldSessionDir, to: newSessionDir, orgId: targetOrg })
+    logger.info('[migration] Migrated legacy session', { from: oldSessionDir, to: newSessionDir, userId: targetUserId })
   }
 
-  private async startOrgSession(orgId: string): Promise<void> {
-    logger.info('Starting org session', { orgId })
+  private async startUserSession(userId: string, orgId: string): Promise<void> {
+    logger.info('Starting user session', { userId, orgId })
 
     try {
-      const sessionPath = path.join(this.config.SESSION_BASE_PATH, orgId)
+      const sessionPath = path.join(this.config.SESSION_BASE_PATH, userId)
       const dedup = new LruDedupCache(this.config.DEDUP_MAX_SIZE, this.config.DEDUP_TTL_MS)
-      const processMessage = new ProcessMessageUseCase(orgId, this.backbone, dedup)
-      const whatsapp = new WhatsAppListenerClient(orgId, sessionPath, processMessage, this.backbone)
+      const processMessage = new ProcessMessageUseCase(userId, this.backbone, dedup)
+      const whatsapp = new WhatsAppListenerClient(userId, orgId, sessionPath, processMessage, this.backbone)
 
-      this.sessions.set(orgId, { orgId, whatsapp })
+      this.sessions.set(userId, { userId, orgId, whatsapp })
       await whatsapp.start()
 
-      logger.info('Org session started', { orgId })
+      logger.info('User session started', { userId, orgId })
     } catch (error) {
-      logger.error('Failed to start org session', { orgId, error })
-      this.sessions.delete(orgId)
+      logger.error('Failed to start user session', { userId, orgId, error })
+      this.sessions.delete(userId)
     }
   }
 }

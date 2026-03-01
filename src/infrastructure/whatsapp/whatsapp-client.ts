@@ -31,6 +31,7 @@ export class WhatsAppListenerClient {
   private readonly sentBodies = new Map<string, number>()
 
   constructor(
+    private readonly userId: string,
     private readonly orgId: string,
     sessionPath: string,
     private readonly processMessage: ProcessMessageUseCase,
@@ -50,9 +51,9 @@ export class WhatsAppListenerClient {
     this.client.on('qr', (qr) => {
       this.currentQr = qr
       this.isReady = false
-      logger.info('QR generated', { orgId: this.orgId })
+      logger.info('QR generated', { userId: this.userId, orgId: this.orgId })
       // Report QR to backbone so frontend can display it
-      void this.backbone.reportQr(this.orgId, qr)
+      void this.backbone.reportQr(this.userId, qr)
     })
 
     this.client.on('ready', () => {
@@ -60,16 +61,16 @@ export class WhatsAppListenerClient {
       this.selfChatId = info.wid._serialized
       this.currentQr = null
       this.isReady = true
-      logger.info('WhatsApp client ready', { orgId: this.orgId, selfChatId: this.selfChatId })
+      logger.info('WhatsApp client ready', { userId: this.userId, orgId: this.orgId, selfChatId: this.selfChatId })
       // Report connected status to backbone
-      void this.backbone.reportStatus(this.orgId, 'connected', info.pushname ?? undefined)
+      void this.backbone.reportStatus(this.userId, 'connected', info.pushname ?? undefined)
     })
 
     this.client.on('disconnected', (reason) => {
       this.isReady = false
-      logger.warn('WhatsApp disconnected', { orgId: this.orgId, reason })
+      logger.warn('WhatsApp disconnected', { userId: this.userId, orgId: this.orgId, reason })
       // Report disconnected status to backbone
-      void this.backbone.reportStatus(this.orgId, 'disconnected')
+      void this.backbone.reportStatus(this.userId, 'disconnected')
     })
 
     /**
@@ -82,7 +83,7 @@ export class WhatsAppListenerClient {
     })
 
     this.client.on('auth_failure', (message) => {
-      logger.error('WhatsApp auth failure', { orgId: this.orgId, message })
+      logger.error('WhatsApp auth failure', { userId: this.userId, orgId: this.orgId, message })
     })
   }
 
@@ -103,6 +104,7 @@ export class WhatsAppListenerClient {
     const bodyExpiry = this.sentBodies.get(msg.body)
     if (bodyExpiry !== undefined && Date.now() < bodyExpiry) {
       logger.debug('Ignoring bot echo (body dedup)', {
+        userId: this.userId,
         orgId: this.orgId,
         bodyPrefix: msg.body.slice(0, 40),
       })
@@ -132,10 +134,10 @@ export class WhatsAppListenerClient {
         this.sentBodies.set(answer, Date.now() + 60_000)
         this.purgeExpiredBodies()
         const sent = await this.client.sendMessage(this.selfChatId, answer)
-        logger.debug('Reply sent', { orgId: this.orgId, incomingId: rawId, sentId: sent.id.id })
+        logger.debug('Reply sent', { userId: this.userId, orgId: this.orgId, incomingId: rawId, sentId: sent.id.id })
       }
     } catch (error) {
-      logger.error('Error processing message', { orgId: this.orgId, error, rawId })
+      logger.error('Error processing message', { userId: this.userId, orgId: this.orgId, error, rawId })
     }
   }
 
@@ -159,12 +161,12 @@ export class WhatsAppListenerClient {
   }
 
   async start(): Promise<void> {
-    logger.info('Starting WhatsApp client...', { orgId: this.orgId })
+    logger.info('Starting WhatsApp client...', { userId: this.userId, orgId: this.orgId })
     await this.client.initialize()
   }
 
   async stop(): Promise<void> {
-    logger.info('Stopping WhatsApp client...', { orgId: this.orgId })
+    logger.info('Stopping WhatsApp client...', { userId: this.userId, orgId: this.orgId })
     await this.client.destroy()
   }
 }
