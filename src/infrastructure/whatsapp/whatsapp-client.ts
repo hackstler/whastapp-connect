@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { Client, LocalAuth } from 'whatsapp-web.js'
 import type { Message } from 'whatsapp-web.js'
 
@@ -35,7 +38,7 @@ export class WhatsAppListenerClient {
   constructor(
     private readonly userId: string,
     private readonly orgId: string,
-    sessionPath: string,
+    private readonly sessionPath: string,
     private readonly processMessage: ProcessMessageUseCase,
     private readonly backbone: BackboneClient,
   ) {
@@ -170,6 +173,7 @@ export class WhatsAppListenerClient {
 
   async start(): Promise<void> {
     logger.info('Starting WhatsApp client...', { userId: this.userId, orgId: this.orgId })
+    this.clearStaleLocks()
     try {
       await this.client.initialize()
     } catch (error) {
@@ -177,6 +181,27 @@ export class WhatsAppListenerClient {
         `Failed to initialize WhatsApp client for user ${this.userId}`,
         error,
       )
+    }
+  }
+
+  /**
+   * Removes stale Chromium profile lock files left behind by previous container
+   * instances (e.g. after a Railway redeploy). Without this, Chromium refuses to
+   * start because it sees the profile as locked by another process.
+   */
+  private clearStaleLocks(): void {
+    const profileDir = path.join(this.sessionPath, 'session', 'Default')
+    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket']
+    for (const file of lockFiles) {
+      const lockPath = path.join(profileDir, file)
+      try {
+        if (fs.existsSync(lockPath)) {
+          fs.unlinkSync(lockPath)
+          logger.info('Cleared stale Chromium lock', { userId: this.userId, lockPath })
+        }
+      } catch {
+        // Non-fatal: if we can't delete it, Chromium will report the error
+      }
     }
   }
 
