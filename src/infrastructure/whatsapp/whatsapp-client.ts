@@ -185,22 +185,33 @@ export class WhatsAppListenerClient {
   }
 
   /**
-   * Removes stale Chromium profile lock files left behind by previous container
+   * Removes stale Chromium singleton lock files left behind by previous container
    * instances (e.g. after a Railway redeploy). Without this, Chromium refuses to
    * start because it sees the profile as locked by another process.
+   *
+   * Path breakdown:
+   *   this.sessionPath         → SESSION_BASE_PATH/<userId>
+   *   + LOCAL_AUTH_SESSION_DIR → userDataDir set by LocalAuth (no clientId → "session")
+   *
+   * SingletonLock/Cookie/Socket live at the ROOT of userDataDir, NOT inside
+   * the "Default" profile subdirectory. Verified against LocalAuth source:
+   *   sessionDirName = clientId ? `session-${clientId}` : 'session'
+   *   userDataDir    = path.join(dataPath, sessionDirName)
    */
   private clearStaleLocks(): void {
-    const profileDir = path.join(this.sessionPath, 'session', 'Default')
-    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket']
-    for (const file of lockFiles) {
-      const lockPath = path.join(profileDir, file)
+    const LOCAL_AUTH_SESSION_DIR = 'session'   // LocalAuth default: no clientId → "session"
+    const CHROMIUM_LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket']
+
+    const userDataDir = path.join(this.sessionPath, LOCAL_AUTH_SESSION_DIR)
+    for (const file of CHROMIUM_LOCK_FILES) {
+      const lockPath = path.join(userDataDir, file)
       try {
         if (fs.existsSync(lockPath)) {
           fs.unlinkSync(lockPath)
           logger.info('Cleared stale Chromium lock', { userId: this.userId, lockPath })
         }
       } catch {
-        // Non-fatal: if we can't delete it, Chromium will report the error
+        // Non-fatal: if deletion fails, Chromium will surface the error itself
       }
     }
   }
