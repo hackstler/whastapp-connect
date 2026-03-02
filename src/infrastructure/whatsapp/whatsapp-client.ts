@@ -1,8 +1,13 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { Client, LocalAuth } from 'whatsapp-web.js'
 import type { Message } from 'whatsapp-web.js'
 
 import type { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
 import type { BackboneClient } from '../http/backbone.client'
+import { ConnectionError } from '../../domain/errors/connection.error'
+import { BackboneUnavailableError } from '../../domain/errors/backbone-unavailable.error'
 import { logger } from '../../shared/logger'
 
 export class WhatsAppListenerClient {
@@ -33,7 +38,7 @@ export class WhatsAppListenerClient {
   constructor(
     private readonly userId: string,
     private readonly orgId: string,
-    sessionPath: string,
+    private readonly sessionPath: string,
     private readonly processMessage: ProcessMessageUseCase,
     private readonly backbone: BackboneClient,
   ) {
@@ -41,6 +46,7 @@ export class WhatsAppListenerClient {
       authStrategy: new LocalAuth({ dataPath: sessionPath }),
       puppeteer: {
         headless: true,
+        executablePath: process.env['PUPPETEER_EXECUTABLE_PATH'],
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       },
     })
@@ -83,7 +89,8 @@ export class WhatsAppListenerClient {
     })
 
     this.client.on('auth_failure', (message) => {
-      logger.error('WhatsApp auth failure', { userId: this.userId, orgId: this.orgId, message })
+      const error = new ConnectionError(`WhatsApp auth failure: ${message}`)
+      logger.error('WhatsApp auth failure', { userId: this.userId, orgId: this.orgId, error: error.message })
     })
   }
 
@@ -137,7 +144,11 @@ export class WhatsAppListenerClient {
         logger.debug('Reply sent', { userId: this.userId, orgId: this.orgId, incomingId: rawId, sentId: sent.id.id })
       }
     } catch (error) {
-      logger.error('Error processing message', { userId: this.userId, orgId: this.orgId, error, rawId })
+      if (error instanceof BackboneUnavailableError) {
+        logger.error('Backbone unavailable while processing message', { userId: this.userId, orgId: this.orgId, error: error.message, rawId })
+      } else {
+        logger.error('Error processing message', { userId: this.userId, orgId: this.orgId, error, rawId })
+      }
     }
   }
 
@@ -162,11 +173,64 @@ export class WhatsAppListenerClient {
 
   async start(): Promise<void> {
     logger.info('Starting WhatsApp client...', { userId: this.userId, orgId: this.orgId })
-    await this.client.initialize()
+    this.clearStaleLocks()
+    try {
+      await this.client.initialize()
+    } catch (error) {
+      throw new ConnectionError(
+        `Failed to initialize WhatsApp client for user ${this.userId}`,
+        error,
+      )
+    }
+  }
+
+  /**
+   * Removes stale Chromium singleton lock files left behind by previous container
+   * instances (e.g. after a Railway redeploy). Without this, Chromium refuses to
+   * start because it sees the profile as locked by another process.
+   *
+   * Path breakdown:
+   *   this.sessionPath         → SESSION_BASE_PATH/<userId>
+   *   + LOCAL_AUTH_SESSION_DIR → userDataDir set by LocalAuth (no clientId → "session")
+   *
+   * SingletonLock/Cookie/Socket live at the ROOT of userDataDir, NOT inside
+   * the "Default" profile subdirectory. Verified against LocalAuth source:
+   *   sessionDirName = clientId ? `session-${clientId}` : 'session'
+   *   userDataDir    = path.join(dataPath, sessionDirName)
+   *
+   * IMPORTANT: On Linux, SingletonLock is a SYMLINK (not a regular file).
+   * fs.existsSync() follows symlinks — when the old container is dead its target
+   * is gone, so existsSync returns false even though the dangling symlink exists.
+   * We must attempt unlink() directly and treat ENOENT as a no-op.
+   */
+  private clearStaleLocks(): void {
+    const LOCAL_AUTH_SESSION_DIR = 'session'   // LocalAuth default: no clientId → "session"
+    const CHROMIUM_LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket']
+
+    const userDataDir = path.join(this.sessionPath, LOCAL_AUTH_SESSION_DIR)
+    for (const file of CHROMIUM_LOCK_FILES) {
+      const lockPath = path.join(userDataDir, file)
+      try {
+        fs.unlinkSync(lockPath)
+        logger.info('Cleared stale Chromium lock', { userId: this.userId, lockPath })
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logger.warn('Could not clear Chromium lock', { userId: this.userId, lockPath, code: (err as NodeJS.ErrnoException).code })
+        }
+        // ENOENT = no stale lock, normal case — skip silently
+      }
+    }
   }
 
   async stop(): Promise<void> {
     logger.info('Stopping WhatsApp client...', { userId: this.userId, orgId: this.orgId })
-    await this.client.destroy()
+    try {
+      await this.client.destroy()
+    } catch (error) {
+      throw new ConnectionError(
+        `Failed to stop WhatsApp client for user ${this.userId}`,
+        error,
+      )
+    }
   }
 }

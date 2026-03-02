@@ -37,17 +37,18 @@ pnpm typecheck      # tsc --noEmit
 src/
 ├── domain/
 │   ├── entities/       # WhatsAppMessage (tipo inmutable)
+│   ├── errors/         # DomainError, ConnectionError, BackboneUnavailableError
 │   └── ports/          # BackbonePort, DedupPort (interfaces)
 ├── application/
 │   └── use-cases/      # ProcessMessageUseCase
 ├── infrastructure/
 │   ├── cache/          # LruDedupCache (implementa DedupPort)
 │   ├── http/           # BackboneClient (implementa BackbonePort)
+│   ├── session/        # SessionManager (orquestación multi-usuario)
 │   └── whatsapp/       # WhatsAppListenerClient (escucha eventos)
 └── shared/
     ├── config.ts       # Config tipado desde env con Zod
-    ├── logger.ts       # Logger estructurado JSON (stdout/stderr)
-    └── errors/         # AppError base class
+    └── logger.ts       # Logger estructurado JSON (stdout/stderr)
 ```
 
 ## Key Env Vars
