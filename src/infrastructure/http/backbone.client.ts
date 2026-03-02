@@ -126,6 +126,25 @@ export class BackboneClient implements BackbonePort {
     const data = await res.json() as { data?: BackboneResponse }
     const response = data?.data
     if (!response) return null
+
+    // Validate document attachment fields if present
+    if (response.document) {
+      const doc = response.document
+      if (
+        typeof doc.base64 !== 'string' || !doc.base64.length ||
+        typeof doc.mimetype !== 'string' || !doc.mimetype.length ||
+        typeof doc.filename !== 'string' || !doc.filename.length
+      ) {
+        logger.warn('[backbone] Invalid document attachment, discarding', {
+          userId,
+          hasBase64: typeof doc.base64 === 'string',
+          hasMimetype: typeof doc.mimetype === 'string',
+          hasFilename: typeof doc.filename === 'string',
+        })
+        response.document = undefined
+      }
+    }
+
     // Return null only if there's neither a reply nor a document
     if (!response.reply && !response.document) return null
     return response

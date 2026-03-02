@@ -130,20 +130,31 @@ export class WhatsAppListenerClient {
     try {
       const response = await this.processMessage.execute(message)
       if (response && this.selfChatId) {
-        // Send PDF document if present
+        // Send document if present (independent of text reply)
         if (response.document) {
-          const media = new MessageMedia(
-            response.document.mimetype,
-            response.document.base64,
-            response.document.filename,
-          )
-          await this.client.sendMessage(this.selfChatId, media)
-          logger.debug('PDF document sent', {
-            userId: this.userId,
-            orgId: this.orgId,
-            incomingId: rawId,
-            filename: response.document.filename,
-          })
+          try {
+            // Register filename in sentBodies to prevent echo loop
+            this.sentBodies.set(response.document.filename, Date.now() + 60_000)
+            const media = new MessageMedia(
+              response.document.mimetype,
+              response.document.base64,
+              response.document.filename,
+            )
+            await this.client.sendMessage(this.selfChatId, media)
+            logger.debug('Document sent', {
+              userId: this.userId,
+              orgId: this.orgId,
+              incomingId: rawId,
+              filename: response.document.filename,
+            })
+          } catch (docErr) {
+            logger.error('Failed to send document, continuing with text reply', {
+              userId: this.userId,
+              orgId: this.orgId,
+              incomingId: rawId,
+              error: docErr,
+            })
+          }
         }
 
         // Send text reply if present
