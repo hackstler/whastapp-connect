@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { Client, LocalAuth } from 'whatsapp-web.js'
+import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js'
 import type { Message } from 'whatsapp-web.js'
 
 import type { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
@@ -128,20 +128,39 @@ export class WhatsAppListenerClient {
     }
 
     try {
-      const answer = await this.processMessage.execute(message)
-      if (answer && this.selfChatId) {
-        /**
-         * CRITICAL: register body BEFORE calling sendMessage().
-         *
-         * In whatsapp-web.js, the message_create event for the sent message
-         * can arrive WHILE sendMessage() is awaiting (i.e., before the
-         * Promise resolves). If we register after, handleOutgoing will have
-         * already processed the bot's own response — infinite loop guaranteed.
-         */
-        this.sentBodies.set(answer, Date.now() + 60_000)
-        this.purgeExpiredBodies()
-        const sent = await this.client.sendMessage(this.selfChatId, answer)
-        logger.debug('Reply sent', { userId: this.userId, orgId: this.orgId, incomingId: rawId, sentId: sent.id.id })
+      const response = await this.processMessage.execute(message)
+      if (response && this.selfChatId) {
+        // Send PDF document if present
+        if (response.document) {
+          const media = new MessageMedia(
+            response.document.mimetype,
+            response.document.base64,
+            response.document.filename,
+          )
+          await this.client.sendMessage(this.selfChatId, media)
+          logger.debug('PDF document sent', {
+            userId: this.userId,
+            orgId: this.orgId,
+            incomingId: rawId,
+            filename: response.document.filename,
+          })
+        }
+
+        // Send text reply if present
+        if (response.reply) {
+          /**
+           * CRITICAL: register body BEFORE calling sendMessage().
+           *
+           * In whatsapp-web.js, the message_create event for the sent message
+           * can arrive WHILE sendMessage() is awaiting (i.e., before the
+           * Promise resolves). If we register after, handleOutgoing will have
+           * already processed the bot's own response — infinite loop guaranteed.
+           */
+          this.sentBodies.set(response.reply, Date.now() + 60_000)
+          this.purgeExpiredBodies()
+          const sent = await this.client.sendMessage(this.selfChatId, response.reply)
+          logger.debug('Reply sent', { userId: this.userId, orgId: this.orgId, incomingId: rawId, sentId: sent.id.id })
+        }
       }
     } catch (error) {
       if (error instanceof BackboneUnavailableError) {
