@@ -1,6 +1,6 @@
 import type { WhatsAppMessage } from '../../domain/entities/whatsapp-message.entity'
 import type { DedupPort } from '../../domain/ports/dedup.port'
-import type { BackbonePort } from '../../domain/ports/backbone.port'
+import type { BackbonePort, BackboneResponse } from '../../domain/ports/backbone.port'
 import { logger } from '../../shared/logger'
 
 export class ProcessMessageUseCase {
@@ -10,7 +10,7 @@ export class ProcessMessageUseCase {
     private readonly dedup: DedupPort,
   ) {}
 
-  async execute(message: WhatsAppMessage): Promise<string | null> {
+  async execute(message: WhatsAppMessage): Promise<BackboneResponse | null> {
     if (this.dedup.isDuplicate(message.id)) {
       logger.debug('Skipping duplicate message', { userId: this.userId, messageId: message.id })
       return null
