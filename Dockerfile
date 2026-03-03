@@ -44,5 +44,6 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=512"
 
 CMD ["node", "dist/index.js"]

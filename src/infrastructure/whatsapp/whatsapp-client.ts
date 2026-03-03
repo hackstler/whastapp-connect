@@ -47,7 +47,27 @@ export class WhatsAppListenerClient {
       puppeteer: {
         headless: true,
         executablePath: process.env['PUPPETEER_EXECUTABLE_PATH'],
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        defaultViewport: { width: 800, height: 600 },
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-gpu',
+          '--disable-dev-shm-usage',
+          '--disable-extensions',
+          '--disable-software-rasterizer',
+          '--disable-background-networking',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--no-first-run',
+          '--disable-translate',
+          '--disable-domain-reliability',
+          '--disable-renderer-backgrounding',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-ipc-flooding-protection',
+          '--metrics-recording-only',
+          '--no-zygote',
+        ],
       },
     })
     this.registerHandlers()

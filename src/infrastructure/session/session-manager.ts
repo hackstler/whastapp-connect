@@ -84,6 +84,10 @@ export class SessionManager {
     // Start sessions for new users (sequentially to avoid launching N Chromiums at once)
     for (const { userId, orgId } of entries) {
       if (!this.sessions.has(userId)) {
+        if (this.sessions.size >= this.config.MAX_SESSIONS) {
+          logger.warn('Max sessions reached, skipping new session', { userId, max: this.config.MAX_SESSIONS })
+          continue
+        }
         await this.startUserSession(userId, orgId)
       }
     }

@@ -11,6 +11,8 @@ const ConfigSchema = z.object({
   SESSION_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   DEDUP_TTL_MS: z.coerce.number().int().positive().default(300_000),
   DEDUP_MAX_SIZE: z.coerce.number().int().positive().default(1000),
+  /** Maximum number of concurrent WhatsApp sessions (each spawns a Chromium process ~500-700MB) */
+  MAX_SESSIONS: z.coerce.number().int().positive().default(3),
 })
 
 export type Config = z.infer<typeof ConfigSchema>
