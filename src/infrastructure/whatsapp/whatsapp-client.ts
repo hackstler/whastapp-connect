@@ -41,13 +41,34 @@ export class WhatsAppListenerClient {
     private readonly sessionPath: string,
     private readonly processMessage: ProcessMessageUseCase,
     private readonly backbone: BackboneClient,
+    private readonly onSessionDead?: (userId: string, reason: string) => void,
   ) {
     this.client = new Client({
       authStrategy: new LocalAuth({ dataPath: sessionPath }),
       puppeteer: {
         headless: true,
         executablePath: process.env['PUPPETEER_EXECUTABLE_PATH'],
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        defaultViewport: { width: 800, height: 600 },
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-gpu',
+          '--disable-dev-shm-usage',
+          '--disable-extensions',
+          '--disable-software-rasterizer',
+          '--disable-background-networking',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--no-first-run',
+          '--disable-translate',
+          '--disable-domain-reliability',
+          '--disable-renderer-backgrounding',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-ipc-flooding-protection',
+          '--metrics-recording-only',
+          '--no-zygote',
+        ],
       },
     })
     this.registerHandlers()
@@ -74,9 +95,10 @@ export class WhatsAppListenerClient {
 
     this.client.on('disconnected', (reason) => {
       this.isReady = false
+      this.currentQr = null
       logger.warn('WhatsApp disconnected', { userId: this.userId, orgId: this.orgId, reason })
-      // Report disconnected status to backbone
       void this.backbone.reportStatus(this.userId, 'disconnected')
+      this.onSessionDead?.(this.userId, `disconnected: ${reason}`)
     })
 
     /**
@@ -89,8 +111,12 @@ export class WhatsAppListenerClient {
     })
 
     this.client.on('auth_failure', (message) => {
+      this.isReady = false
+      this.currentQr = null
       const error = new ConnectionError(`WhatsApp auth failure: ${message}`)
       logger.error('WhatsApp auth failure', { userId: this.userId, orgId: this.orgId, error: error.message })
+      void this.backbone.reportStatus(this.userId, 'disconnected')
+      this.onSessionDead?.(this.userId, `auth_failure: ${message}`)
     })
   }
 

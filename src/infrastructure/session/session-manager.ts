@@ -12,6 +12,8 @@ interface UserSession {
   userId: string
   orgId: string
   whatsapp: WhatsAppListenerClient
+  /** Timestamp when the session entered a dead state (not ready, no QR). Used by zombie detection. */
+  deadSince?: number
 }
 
 export class SessionManager {
@@ -19,6 +21,12 @@ export class SessionManager {
   private readonly backbone: BackboneClient
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private zombieTimer: ReturnType<typeof setInterval> | null = null
+
+  /** Tracks how many consecutive polls each userId has been missing from backbone */
+  private readonly backboneMissCount = new Map<string, number>()
+  /** Guards teardown — prevents syncSessions from recreating a session mid-teardown */
+  private readonly tearingDown = new Set<string>()
 
   constructor(private readonly config: Config) {
     this.backbone = new BackboneClient(config.BACKBONE_URL, config.JWT_SECRET)
@@ -48,6 +56,11 @@ export class SessionManager {
       }
     }, 30_000)
 
+    // Zombie detector: catch sessions stuck in limbo (not ready, no QR)
+    this.zombieTimer = setInterval(() => {
+      this.checkForZombies()
+    }, 60_000)
+
     logger.info('SessionManager started', {
       sessionCount: this.sessions.size,
       pollIntervalMs: this.config.SESSION_POLL_INTERVAL_MS,
@@ -57,6 +70,7 @@ export class SessionManager {
   async stop(): Promise<void> {
     if (this.pollTimer) clearInterval(this.pollTimer)
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    if (this.zombieTimer) clearInterval(this.zombieTimer)
 
     logger.info('Stopping all user sessions...', { sessionCount: this.sessions.size })
 
@@ -73,23 +87,102 @@ export class SessionManager {
     this.sessions.clear()
   }
 
-  async syncSessions(): Promise<void> {
-    const entries = await this.backbone.getSessions()
+  /**
+   * Tears down a single user session: removes from map, destroys Chromium, frees RAM.
+   * Safe to call multiple times — the tearingDown guard prevents re-entry.
+   */
+  async teardownSession(userId: string, reason: string): Promise<void> {
+    if (this.tearingDown.has(userId)) return
+    this.tearingDown.add(userId)
 
-    if (entries.length === 0) {
-      logger.warn('No sessions returned from backbone')
+    const session = this.sessions.get(userId)
+    if (!session) {
+      this.tearingDown.delete(userId)
       return
     }
 
-    // Start sessions for new users (sequentially to avoid launching N Chromiums at once)
-    for (const { userId, orgId } of entries) {
-      if (!this.sessions.has(userId)) {
-        await this.startUserSession(userId, orgId)
+    // Remove from map BEFORE calling stop() to prevent syncSessions from seeing it
+    this.sessions.delete(userId)
+    this.backboneMissCount.delete(userId)
+
+    logger.info('Tearing down session', { userId, reason })
+
+    try {
+      await session.whatsapp.stop()
+      logger.info('Session torn down successfully', { userId, reason })
+    } catch (error) {
+      logger.error('Error during session teardown', { userId, reason, error })
+    } finally {
+      this.tearingDown.delete(userId)
+    }
+  }
+
+  /**
+   * Detects zombie sessions: sessions that are neither ready nor showing a QR
+   * for longer than ZOMBIE_TIMEOUT_MS. This catches edge cases like initialize()
+   * hanging, lost events, etc.
+   */
+  private checkForZombies(): void {
+    const now = Date.now()
+    for (const [userId, session] of this.sessions) {
+      if (session.whatsapp.isReady) continue
+      if (session.whatsapp.currentQr) continue
+
+      // Session is in a dead state — check how long
+      if (!session.deadSince) {
+        session.deadSince = now
+        continue
+      }
+
+      if (now - session.deadSince > this.config.ZOMBIE_TIMEOUT_MS) {
+        logger.warn('Zombie session detected', {
+          userId,
+          deadForMs: now - session.deadSince,
+        })
+        void this.teardownSession(userId, 'zombie: not ready and no QR')
       }
     }
+  }
 
-    // NOTE: we intentionally do NOT tear down sessions that disappeared from the list.
-    // This prevents accidental disconnections if the backbone DB has a transient issue.
+  async syncSessions(): Promise<void> {
+    const entries = await this.backbone.getSessions()
+
+    // Empty list = backbone might be down — don't touch anything
+    if (entries.length === 0) {
+      logger.warn('No sessions returned from backbone — skipping sync')
+      return
+    }
+
+    const backboneUserIds = new Set(entries.map((e) => e.userId))
+
+    // Start sessions for new users (sequentially to avoid launching N Chromiums at once)
+    for (const { userId, orgId } of entries) {
+      // Reset miss counter — user is present in backbone
+      this.backboneMissCount.delete(userId)
+
+      if (this.sessions.has(userId) || this.tearingDown.has(userId)) continue
+
+      if (this.sessions.size >= this.config.MAX_SESSIONS) {
+        logger.warn('Max sessions reached, skipping new session', { userId, max: this.config.MAX_SESSIONS })
+        continue
+      }
+      await this.startUserSession(userId, orgId)
+    }
+
+    // Detect sessions that disappeared from backbone
+    for (const userId of this.sessions.keys()) {
+      if (backboneUserIds.has(userId)) continue
+
+      const count = (this.backboneMissCount.get(userId) ?? 0) + 1
+      this.backboneMissCount.set(userId, count)
+
+      if (count >= this.config.BACKBONE_MISS_THRESHOLD) {
+        logger.warn('User missing from backbone, tearing down', { userId, missCount: count })
+        void this.teardownSession(userId, `backbone miss (${count} consecutive polls)`)
+      } else {
+        logger.debug('User missing from backbone', { userId, missCount: count, threshold: this.config.BACKBONE_MISS_THRESHOLD })
+      }
+    }
   }
 
   /**
@@ -133,7 +226,10 @@ export class SessionManager {
       const sessionPath = path.join(this.config.SESSION_BASE_PATH, userId)
       const dedup = new LruDedupCache(this.config.DEDUP_MAX_SIZE, this.config.DEDUP_TTL_MS)
       const processMessage = new ProcessMessageUseCase(userId, this.backbone, dedup)
-      const whatsapp = new WhatsAppListenerClient(userId, orgId, sessionPath, processMessage, this.backbone)
+      const onSessionDead = (uid: string, reason: string) => {
+        void this.teardownSession(uid, reason)
+      }
+      const whatsapp = new WhatsAppListenerClient(userId, orgId, sessionPath, processMessage, this.backbone, onSessionDead)
 
       this.sessions.set(userId, { userId, orgId, whatsapp })
       await whatsapp.start()
