@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken'
 
 import type { WhatsAppMessage } from '../../domain/entities/whatsapp-message.entity'
-import type { BackbonePort } from '../../domain/ports/backbone.port'
+import type { BackbonePort, BackboneResponse } from '../../domain/ports/backbone.port'
 import { BackboneUnavailableError } from '../../domain/errors/backbone-unavailable.error'
 import { logger } from '../../shared/logger'
 
@@ -92,11 +92,11 @@ export class BackboneClient implements BackbonePort {
   }
 
   /**
-   * Send a WhatsApp message to the backbone for RAG processing.
+   * Send a WhatsApp message to the backbone for agent processing.
    * POST /internal/whatsapp/message
-   * Returns the agent's reply or null if unavailable.
+   * Returns a BackboneResponse (text reply and/or PDF document) or null if unavailable.
    */
-  async sendMessage(userId: string, message: WhatsAppMessage): Promise<string | null> {
+  async sendMessage(userId: string, message: WhatsAppMessage): Promise<BackboneResponse | null> {
     let res: Response
     try {
       res = await fetch(`${this.baseUrl}/internal/whatsapp/message`, {
@@ -108,7 +108,7 @@ export class BackboneClient implements BackbonePort {
           chatId: message.chatId,
           userId,
         }),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(60_000),
       })
     } catch (error) {
       throw new BackboneUnavailableError(
@@ -123,7 +123,30 @@ export class BackboneClient implements BackbonePort {
       )
     }
 
-    const data = await res.json() as { data?: { reply?: string } }
-    return data?.data?.reply ?? null
+    const data = await res.json() as { data?: BackboneResponse }
+    const response = data?.data
+    if (!response) return null
+
+    // Validate document attachment fields if present
+    if (response.document) {
+      const doc = response.document
+      if (
+        typeof doc.base64 !== 'string' || !doc.base64.length ||
+        typeof doc.mimetype !== 'string' || !doc.mimetype.length ||
+        typeof doc.filename !== 'string' || !doc.filename.length
+      ) {
+        logger.warn('[backbone] Invalid document attachment, discarding', {
+          userId,
+          hasBase64: typeof doc.base64 === 'string',
+          hasMimetype: typeof doc.mimetype === 'string',
+          hasFilename: typeof doc.filename === 'string',
+        })
+        response.document = undefined
+      }
+    }
+
+    // Return null only if there's neither a reply nor a document
+    if (!response.reply && !response.document) return null
+    return response
   }
 }

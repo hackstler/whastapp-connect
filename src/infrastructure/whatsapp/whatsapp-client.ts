@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { Client, LocalAuth } from 'whatsapp-web.js'
+import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js'
 import type { Message } from 'whatsapp-web.js'
 
 import type { ProcessMessageUseCase } from '../../application/use-cases/process-message.use-case'
@@ -41,13 +41,34 @@ export class WhatsAppListenerClient {
     private readonly sessionPath: string,
     private readonly processMessage: ProcessMessageUseCase,
     private readonly backbone: BackboneClient,
+    private readonly onSessionDead?: (userId: string, reason: string) => void,
   ) {
     this.client = new Client({
       authStrategy: new LocalAuth({ dataPath: sessionPath }),
       puppeteer: {
         headless: true,
         executablePath: process.env['PUPPETEER_EXECUTABLE_PATH'],
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        defaultViewport: { width: 800, height: 600 },
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-gpu',
+          '--disable-dev-shm-usage',
+          '--disable-extensions',
+          '--disable-software-rasterizer',
+          '--disable-background-networking',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--no-first-run',
+          '--disable-translate',
+          '--disable-domain-reliability',
+          '--disable-renderer-backgrounding',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-ipc-flooding-protection',
+          '--metrics-recording-only',
+          '--no-zygote',
+        ],
       },
     })
     this.registerHandlers()
@@ -74,9 +95,10 @@ export class WhatsAppListenerClient {
 
     this.client.on('disconnected', (reason) => {
       this.isReady = false
+      this.currentQr = null
       logger.warn('WhatsApp disconnected', { userId: this.userId, orgId: this.orgId, reason })
-      // Report disconnected status to backbone
       void this.backbone.reportStatus(this.userId, 'disconnected')
+      this.onSessionDead?.(this.userId, `disconnected: ${reason}`)
     })
 
     /**
@@ -89,8 +111,12 @@ export class WhatsAppListenerClient {
     })
 
     this.client.on('auth_failure', (message) => {
+      this.isReady = false
+      this.currentQr = null
       const error = new ConnectionError(`WhatsApp auth failure: ${message}`)
       logger.error('WhatsApp auth failure', { userId: this.userId, orgId: this.orgId, error: error.message })
+      void this.backbone.reportStatus(this.userId, 'disconnected')
+      this.onSessionDead?.(this.userId, `auth_failure: ${message}`)
     })
   }
 
@@ -128,20 +154,50 @@ export class WhatsAppListenerClient {
     }
 
     try {
-      const answer = await this.processMessage.execute(message)
-      if (answer && this.selfChatId) {
-        /**
-         * CRITICAL: register body BEFORE calling sendMessage().
-         *
-         * In whatsapp-web.js, the message_create event for the sent message
-         * can arrive WHILE sendMessage() is awaiting (i.e., before the
-         * Promise resolves). If we register after, handleOutgoing will have
-         * already processed the bot's own response — infinite loop guaranteed.
-         */
-        this.sentBodies.set(answer, Date.now() + 60_000)
-        this.purgeExpiredBodies()
-        const sent = await this.client.sendMessage(this.selfChatId, answer)
-        logger.debug('Reply sent', { userId: this.userId, orgId: this.orgId, incomingId: rawId, sentId: sent.id.id })
+      const response = await this.processMessage.execute(message)
+      if (response && this.selfChatId) {
+        // Send document if present (independent of text reply)
+        if (response.document) {
+          try {
+            // Register filename in sentBodies to prevent echo loop
+            this.sentBodies.set(response.document.filename, Date.now() + 60_000)
+            const media = new MessageMedia(
+              response.document.mimetype,
+              response.document.base64,
+              response.document.filename,
+            )
+            await this.client.sendMessage(this.selfChatId, media)
+            logger.debug('Document sent', {
+              userId: this.userId,
+              orgId: this.orgId,
+              incomingId: rawId,
+              filename: response.document.filename,
+            })
+          } catch (docErr) {
+            logger.error('Failed to send document, continuing with text reply', {
+              userId: this.userId,
+              orgId: this.orgId,
+              incomingId: rawId,
+              error: docErr,
+            })
+          }
+        }
+
+        // Send text reply if present
+        if (response.reply) {
+          /**
+           * CRITICAL: register body BEFORE calling sendMessage().
+           *
+           * In whatsapp-web.js, the message_create event for the sent message
+           * can arrive WHILE sendMessage() is awaiting (i.e., before the
+           * Promise resolves). If we register after, handleOutgoing will have
+           * already processed the bot's own response — infinite loop guaranteed.
+           */
+          this.sentBodies.set(response.reply, Date.now() + 60_000)
+          this.purgeExpiredBodies()
+          const sent = await this.client.sendMessage(this.selfChatId, response.reply)
+          logger.debug('Reply sent', { userId: this.userId, orgId: this.orgId, incomingId: rawId, sentId: sent.id.id })
+        }
       }
     } catch (error) {
       if (error instanceof BackboneUnavailableError) {
