@@ -14,6 +14,8 @@ interface UserSession {
   whatsapp: WhatsAppListenerClient
   /** Timestamp when the session entered a dead state (not ready, no QR). Used by zombie detection. */
   deadSince?: number
+  /** Timestamp when the session first showed a QR without connecting. Used by QR timeout. */
+  qrSince?: number
 }
 
 export class SessionManager {
@@ -45,13 +47,13 @@ export class SessionManager {
       void this.syncSessions()
     }, this.config.SESSION_POLL_INTERVAL_MS)
 
-    // Heartbeat: re-report current status every 30s
+    // Heartbeat: re-report ONLY connected sessions every 30s.
+    // QR sessions are NOT heartbeated — they should expire via backbone stale cleanup
+    // if nobody scans them within 5 minutes.
     this.heartbeatTimer = setInterval(() => {
       for (const session of this.sessions.values()) {
         if (session.whatsapp.isReady) {
           void this.backbone.reportStatus(session.userId, 'connected')
-        } else if (session.whatsapp.currentQr) {
-          void this.backbone.reportQr(session.userId, session.whatsapp.currentQr)
         }
       }
     }, 30_000)
@@ -124,11 +126,32 @@ export class SessionManager {
    */
   private checkForZombies(): void {
     const now = Date.now()
-    for (const [userId, session] of this.sessions) {
-      if (session.whatsapp.isReady) continue
-      if (session.whatsapp.currentQr) continue
+    const QR_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes of QR without connecting → teardown
 
-      // Session is in a dead state — check how long
+    for (const [userId, session] of this.sessions) {
+      if (session.whatsapp.isReady) {
+        // Connected — reset all timers
+        session.deadSince = undefined
+        session.qrSince = undefined
+        continue
+      }
+
+      // QR timeout: session showing QR for too long without anyone scanning it
+      if (session.whatsapp.currentQr) {
+        if (!session.qrSince) {
+          session.qrSince = now
+        } else if (now - session.qrSince > QR_TIMEOUT_MS) {
+          logger.warn('QR timeout — session showing QR too long without connecting', {
+            userId,
+            qrForMs: now - session.qrSince,
+          })
+          void this.backbone.reportStatus(session.userId, 'disconnected')
+          void this.teardownSession(userId, 'QR timeout: not scanned within 5 minutes')
+        }
+        continue
+      }
+
+      // Dead state: not ready, no QR
       if (!session.deadSince) {
         session.deadSince = now
         continue
