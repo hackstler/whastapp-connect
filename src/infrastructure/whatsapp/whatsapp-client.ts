@@ -35,6 +35,9 @@ export class WhatsAppListenerClient {
    */
   private readonly sentBodies = new Map<string, number>()
 
+  /** Current pairing code (set when linkingMethod is "code"). null when not applicable or already authenticated. */
+  public currentPairingCode: string | null = null
+
   constructor(
     private readonly userId: string,
     private readonly orgId: string,
@@ -42,7 +45,14 @@ export class WhatsAppListenerClient {
     private readonly processMessage: ProcessMessageUseCase,
     private readonly backbone: BackboneClient,
     private readonly onSessionDead?: (userId: string, reason: string) => void,
+    private readonly linkingMethod: 'qr' | 'code' = 'qr',
+    private readonly phoneNumber?: string,
   ) {
+    // Build pairWithPhoneNumber option when using code-based linking
+    const pairOption = this.linkingMethod === 'code' && this.phoneNumber
+      ? { phoneNumber: this.phoneNumber.replace(/[^0-9]/g, ''), showNotification: true }
+      : undefined
+
     this.client = new Client({
       authStrategy: new LocalAuth({ dataPath: sessionPath }),
       puppeteer: {
@@ -70,23 +80,35 @@ export class WhatsAppListenerClient {
           '--no-zygote',
         ],
       },
+      ...(pairOption ? { pairWithPhoneNumber: pairOption } : {}),
     })
     this.registerHandlers()
   }
 
   private registerHandlers(): void {
-    this.client.on('qr', (qr) => {
-      this.currentQr = qr
-      this.isReady = false
-      logger.info('QR generated', { userId: this.userId, orgId: this.orgId })
-      // Report QR to backbone so frontend can display it
-      void this.backbone.reportQr(this.userId, qr)
-    })
+    if (this.linkingMethod === 'code') {
+      // Pairing code flow: listen for the "code" event instead of "qr"
+      this.client.on('code', (code: string) => {
+        this.currentPairingCode = code
+        this.isReady = false
+        logger.info('Pairing code received', { userId: this.userId, orgId: this.orgId, code })
+        void this.backbone.reportPairingCode(this.userId, code)
+      })
+    } else {
+      this.client.on('qr', (qr) => {
+        this.currentQr = qr
+        this.isReady = false
+        logger.info('QR generated', { userId: this.userId, orgId: this.orgId })
+        // Report QR to backbone so frontend can display it
+        void this.backbone.reportQr(this.userId, qr)
+      })
+    }
 
     this.client.on('ready', () => {
       const info = this.client.info
       this.selfChatId = info.wid._serialized
       this.currentQr = null
+      this.currentPairingCode = null
       this.isReady = true
       logger.info('WhatsApp client ready', { userId: this.userId, orgId: this.orgId, selfChatId: this.selfChatId })
       // Report connected status to backbone
@@ -96,6 +118,7 @@ export class WhatsAppListenerClient {
     this.client.on('disconnected', (reason) => {
       this.isReady = false
       this.currentQr = null
+      this.currentPairingCode = null
       logger.warn('WhatsApp disconnected', { userId: this.userId, orgId: this.orgId, reason })
       void this.backbone.reportStatus(this.userId, 'disconnected')
       this.onSessionDead?.(this.userId, `disconnected: ${reason}`)
@@ -113,6 +136,7 @@ export class WhatsAppListenerClient {
     this.client.on('auth_failure', (message) => {
       this.isReady = false
       this.currentQr = null
+      this.currentPairingCode = null
       const error = new ConnectionError(`WhatsApp auth failure: ${message}`)
       logger.error('WhatsApp auth failure', { userId: this.userId, orgId: this.orgId, error: error.message })
       void this.backbone.reportStatus(this.userId, 'disconnected')
@@ -228,7 +252,7 @@ export class WhatsAppListenerClient {
   }
 
   async start(): Promise<void> {
-    logger.info('Starting WhatsApp client...', { userId: this.userId, orgId: this.orgId })
+    logger.info('Starting WhatsApp client...', { userId: this.userId, orgId: this.orgId, linkingMethod: this.linkingMethod })
     this.clearStaleLocks()
     try {
       await this.client.initialize()

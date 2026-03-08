@@ -32,7 +32,7 @@ export class BackboneClient implements BackbonePort {
    * Fetch the list of user+org session entries from the backbone.
    * GET /internal/whatsapp/sessions
    */
-  async getSessions(): Promise<{ userId: string; orgId: string }[]> {
+  async getSessions(): Promise<{ userId: string; orgId: string; linkingMethod?: 'qr' | 'code'; phoneNumber?: string }[]> {
     try {
       const res = await fetch(`${this.baseUrl}/internal/whatsapp/sessions`, {
         method: 'GET',
@@ -43,7 +43,7 @@ export class BackboneClient implements BackbonePort {
         logger.warn('[backbone] getSessions failed', { status: res.status })
         return []
       }
-      const data = await res.json() as { data?: { userId: string; orgId: string }[] }
+      const data = await res.json() as { data?: { userId: string; orgId: string; linkingMethod?: 'qr' | 'code'; phoneNumber?: string }[] }
       return data?.data ?? []
     } catch (error) {
       logger.error('[backbone] getSessions error', { error })
@@ -88,6 +88,26 @@ export class BackboneClient implements BackbonePort {
       }
     } catch (error) {
       logger.error('[backbone] reportStatus error', { userId, error })
+    }
+  }
+
+  /**
+   * Report a pairing code to the backbone.
+   * POST /internal/whatsapp/pairing-code
+   */
+  async reportPairingCode(userId: string, code: string): Promise<void> {
+    try {
+      const res = await fetch(`${this.baseUrl}/internal/whatsapp/pairing-code`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ userId, code }),
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!res.ok) {
+        logger.warn('[backbone] reportPairingCode failed', { userId, status: res.status })
+      }
+    } catch (error) {
+      logger.error('[backbone] reportPairingCode error', { userId, error })
     }
   }
 

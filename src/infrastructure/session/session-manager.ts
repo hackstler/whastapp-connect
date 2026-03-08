@@ -136,17 +136,17 @@ export class SessionManager {
         continue
       }
 
-      // QR timeout: session showing QR for too long without anyone scanning it
-      if (session.whatsapp.currentQr) {
+      // QR/code timeout: session showing QR or pairing code for too long without connecting
+      if (session.whatsapp.currentQr || session.whatsapp.currentPairingCode) {
         if (!session.qrSince) {
           session.qrSince = now
         } else if (now - session.qrSince > QR_TIMEOUT_MS) {
-          logger.warn('QR timeout — session showing QR too long without connecting', {
+          logger.warn('Linking timeout — session showing QR/code too long without connecting', {
             userId,
             qrForMs: now - session.qrSince,
           })
           void this.backbone.reportStatus(session.userId, 'disconnected')
-          void this.teardownSession(userId, 'QR timeout: not scanned within 5 minutes')
+          void this.teardownSession(userId, 'Linking timeout: not connected within 5 minutes')
         }
         continue
       }
@@ -179,7 +179,7 @@ export class SessionManager {
     const backboneUserIds = new Set(entries.map((e) => e.userId))
 
     // Start sessions for new users (sequentially to avoid launching N Chromiums at once)
-    for (const { userId, orgId } of entries) {
+    for (const { userId, orgId, linkingMethod, phoneNumber } of entries) {
       // Reset miss counter — user is present in backbone
       this.backboneMissCount.delete(userId)
 
@@ -189,7 +189,7 @@ export class SessionManager {
         logger.warn('Max sessions reached, skipping new session', { userId, max: this.config.MAX_SESSIONS })
         continue
       }
-      await this.startUserSession(userId, orgId)
+      await this.startUserSession(userId, orgId, linkingMethod, phoneNumber)
     }
 
     // Detect sessions that disappeared from backbone
@@ -242,8 +242,13 @@ export class SessionManager {
     logger.info('[migration] Migrated legacy session', { from: oldSessionDir, to: newSessionDir, userId: targetUserId })
   }
 
-  private async startUserSession(userId: string, orgId: string): Promise<void> {
-    logger.info('Starting user session', { userId, orgId })
+  private async startUserSession(
+    userId: string,
+    orgId: string,
+    linkingMethod?: 'qr' | 'code',
+    phoneNumber?: string,
+  ): Promise<void> {
+    logger.info('Starting user session', { userId, orgId, linkingMethod })
 
     try {
       const sessionPath = path.join(this.config.SESSION_BASE_PATH, userId)
@@ -252,7 +257,7 @@ export class SessionManager {
       const onSessionDead = (uid: string, reason: string) => {
         void this.teardownSession(uid, reason)
       }
-      const whatsapp = new WhatsAppListenerClient(userId, orgId, sessionPath, processMessage, this.backbone, onSessionDead)
+      const whatsapp = new WhatsAppListenerClient(userId, orgId, sessionPath, processMessage, this.backbone, onSessionDead, linkingMethod, phoneNumber)
 
       this.sessions.set(userId, { userId, orgId, whatsapp })
       await whatsapp.start()
